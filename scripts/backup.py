@@ -35,6 +35,15 @@ def current_ledger(target=None):
     ))
 
 
+def sha256_file(path):
+    """Compatible with the Python 3.10 system interpreter on deployment hosts."""
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def private_write(path, data):
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w") as stream:
@@ -55,8 +64,7 @@ def backup(target=None):
         stream.flush()
         os.fsync(stream.fileno())
     private_write(folder / "deletions.json", current_ledger(target))
-    with path.open("rb") as stream:
-        checksum = hashlib.file_digest(stream, "sha256").hexdigest()
+    checksum = sha256_file(path)
     private_write(folder / "manifest.json", {
         "format": 2, "target": target.identity(),
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -104,8 +112,7 @@ def restore(folder, database, ledger_path=None, verify=False, target=None, allow
             raise ValueError("Backup target differs; cross-environment migration requires --allow-cross-environment")
     elif target.environment != "local" and not allow_cross_environment:
         raise ValueError("Legacy backup has no target metadata; require explicit --allow-cross-environment")
-    with (folder / "memory.dump").open("rb") as stream:
-        checksum = hashlib.file_digest(stream, "sha256").hexdigest()
+    checksum = sha256_file(folder / "memory.dump")
     if checksum != manifest["sha256"]:
         raise ValueError("Backup checksum mismatch")
     ledger = json.loads((folder / "deletions.json").read_text())
