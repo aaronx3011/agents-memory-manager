@@ -7,12 +7,30 @@ Local directory, coordinator project slug, Python package and image names remain
 
 ## Current state
 
-The deployment assets are implemented locally (task #115), following the strategy
-from task #114. Git `main` and `origin` are configured. At inspection the supplied
-GitHub repository was empty/public and had no registered runners, environments,
-Actions secrets or variables. Initial publication and hosted CI verification are
-tracked in task #116; Git history and GitHub Actions show the actual published
-release/checks. Remote rollout is distinct from local Docker deployment tests.
+**The service is now deployed on the self-hosted worker machine `lesbian`
+(10.8.0.6) and no longer runs on the Mac.**
+
+| Item | Value |
+| --- | --- |
+| Host | `lesbian`, `10.8.0.6`, Debian 13, x86_64 |
+| Path | `~/agent-memory` (`/opt` requires an unavailable sudo password) |
+| Compose project | `agent-memory-dev` |
+| Images | `agent-memory:7d10c17e668e1339134861e1175a33227ef045d1`, `agent-memory-db:7d10c17e…` |
+| App URL (VPN) | `http://10.8.0.6:8765` — UI, `/docs`, `/mcp/` |
+| App binding | Only `10.8.0.6:8765`; PostgreSQL is not published |
+| Data | Migrated owner identity, 1 project, 1 source memory, 1 checkpoint |
+| Hosted CI | Passed for `7d10c17` ([run](https://github.com/aaronx3011/agents-memory-manager/actions/runs/40378843294)) |
+| Local Mac runtime | Containers, volumes, `.env` and backups removed |
+| OpenCode | MCP and plugin repointed to `http://10.8.0.6:8765`; `opencode mcp list` connected |
+
+The deployment used the committed scripts and SHA images manually on the host,
+because GitHub Actions has no registered runner for this repository and
+`DEPLOY_ENABLED` is not set. The `ship` job therefore remains disabled until the
+runner and deployment inputs are configured. No HTTPS ingress is configured yet;
+access is over the encrypted WireGuard VPN and bound to the VPN interface.
+
+Initial publication and hosted CI verification are recorded in task #116. The
+deployment assets themselves were delivered by task #115.
 
 Implemented assets:
 
@@ -34,7 +52,8 @@ Implemented assets:
 
 The coordinator's `.github/workflows/deploy.yml` documents a self-hosted runner
 at `10.8.0.6`, labels `[self-hosted, dev-runner]`, image shipment using
-`docker save | gzip | ssh ... docker load`, and development host `10.8.0.11`.
+`docker save | gzip | ssh ... docker load`. Memory is deployed on that same
+worker machine (`10.8.0.6`); the coordinator's separate development host is `10.8.0.11`.
 Its production template uses a separately configured target and external proxy
 network, without a published web port. Its runner container uses host networking
 for VPN reachability. Operations issue:
@@ -54,7 +73,7 @@ agents-memory-manager GitHub repository
   -> verify selected SHA on a GitHub-hosted disposable Docker stack
   -> [self-hosted, dev-runner] builds app + custom pgvector image for target CPU
   -> gzip/SSH image shipment; rsync versioned assets
-  -> /opt/agent-memory/deploy/{development,production}
+  -> ~/agent-memory/deploy/{development,production}   # this host: sudo unavailable
   -> internal MCP verification + runner health + authenticated ingress MCP check
   -> coordinator deployment outcome
 ```
@@ -91,7 +110,7 @@ Configure these **Actions variables**:
 | Variable | Example/purpose |
 | --- | --- |
 | `DEPLOY_ENABLED` | Repository-level variable: set to `true` after runner/host/settings are ready; otherwise CI runs and shipping is skipped |
-| `DEV_HEALTH_URL` | `http://10.8.0.11:8765/health`, if that VPN host/port is selected |
+| `DEV_HEALTH_URL` | `http://10.8.0.6:8765/health` for the current worker deployment |
 | `PROD_PUBLIC_HOST` | Dedicated memory HTTPS hostname, without scheme/path |
 
 Secrets in `agents-task-manager` are not automatically available in this repo.
@@ -101,7 +120,7 @@ fall back to development. SSH host identity must match the supplied known-hosts 
 
 ## 3. Prepare the target host and private environment
 
-Use a separate `/opt/agent-memory`, owned by the deployment user. That user needs
+Use a separate `~/agent-memory` here (or `/opt/agent-memory` where sudo is available), owned by the deployment user. That user needs
 Docker access. Keep `/opt/agents-task-manager` unchanged. Provisioning needs the
 memory `deploy/` and `scripts/` directories on the host before the first deployment;
 they can be transferred after publishing or securely copied from this checkout.
@@ -111,7 +130,7 @@ development target (confirm these values for the actual host):
 
 ```sh
 python3 scripts/configure.py --environment development \
-  --bind-ip 10.8.0.11 --port 8765
+  --bind-ip 10.8.0.6 --port 8765
 ```
 
 For production, first confirm the existing HTTPS proxy's Docker network and memory
@@ -158,7 +177,7 @@ The shipping job:
 2. Builds `agent-memory:<SHA>` and `agent-memory-db:<SHA>` from pinned bases/locked deps.
 3. Ships **both** images over SSH. The DB image includes role/pgvector initialization.
 4. Rsyncs versioned deploy/scripts assets, excluding private configuration and markers.
-5. Calls `bash /opt/agent-memory/scripts/deploy.sh development <SHA>`.
+5. Calls `bash ~/agent-memory/scripts/deploy.sh development <SHA>`.
 6. Checks ingress health from the runner and authenticated MCP through that origin
    from the deployed app, keeping its owner credential private on the target.
 7. Reports the actual outcome and GitHub run URL to the coordinator, then removes SSH files.
@@ -169,7 +188,7 @@ Updates take an environment-specific backup of the previous verified release fir
 
 ## 5. Select the environment explicitly for operations
 
-All examples below run from `/opt/agent-memory`. Helpers default to the root local
+All examples below run from `~/agent-memory` on the worker. Helpers default to the root local
 Compose setup for backwards compatibility. **Always pass `--environment` on a server.**
 
 ```sh

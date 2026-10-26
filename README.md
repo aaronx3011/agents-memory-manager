@@ -2,6 +2,8 @@
 
 Repository: [aaronx3011/agents-memory-manager](https://github.com/aaronx3011/agents-memory-manager).
 
+Deployed on the self-hosted worker `lesbian`: **http://10.8.0.6:8765** (VPN-only).
+
 Persistent, multi-project agent memory running locally with Docker. Knowledge is
 stored in PostgreSQL outside your repositories, with local semantic embeddings,
 keyword search, sourced records, corrections, session checkpoints, MCP tools, and

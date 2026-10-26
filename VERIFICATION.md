@@ -37,6 +37,29 @@ The browser test logs in, creates a sourced memory, inspects provenance, correct
 it, searches using hybrid recall, deletes current and superseded fixtures, and
 opens background job inspection. It checks for JavaScript page errors.
 
+## Worker deployment (2026-10-26)
+
+Deployed to the self-hosted worker `lesbian` (10.8.0.6, Debian 13, x86_64), because
+the owner requires the memory service to run on the self-hosted worker machine, not
+the Mac. The service runs under `~/agent-memory` (sudo is password-protected, so
+`/opt` was not used) as Compose project `agent-memory-dev`.
+
+| Check | Result |
+| --- | --- |
+| x86_64 images built on the target | `agent-memory:7d10c17…` and `agent-memory-db:7d10c17…` |
+| Existing owner/project/memory/checkpoint migrated | **Passed**: 1 project, 1 memory, 1 checkpoint, 3 migrations |
+| `scripts/deploy.sh development <SHA>` on the worker | **Passed**: healthy app+DB, warmup, two-client MCP smoke |
+| Mac → VPN health and authenticated API | **Passed** |
+| Existing non-admin OpenCode agent key against remote | **Passed** |
+| OpenCode MCP reconnection | **Passed**: `opencode mcp list` shows `agent-memory connected` |
+| Network exposure | App listens only on `10.8.0.6:8765`; DB unpublished |
+| Local Mac runtime removed | Containers, volumes, network, `.env`, `.verification` and backups removed; port 8765 closed |
+| Private backup moved off the Mac | Copied to `~/agent-memory/backups` on the worker before local deletion |
+
+Not verified/configured: HTTPS ingress, scheduled off-host backup replication, and
+the GitHub self-hosted `ship` job (no runner registered for this repository yet).
+The service is VPN-only over WireGuard at the time of writing.
+
 ## Deployment asset verification (#115)
 
 Development/production Compose and deployment helpers were exercised on disposable
