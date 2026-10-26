@@ -120,13 +120,21 @@ jobs:
             echo "Ingress health check failed for $MEMORY_HEALTH_URL" >&2
             exit 1
           fi
-          ssh -i "$MEMORY_SSH_DIR/key" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+          # Read the owner token over the already-authenticated SSH channel, keep it
+          # only in this job's temporary directory, and exercise the published origin
+          # from the runner (the target cannot reach its own WireGuard address).
+          TOKEN=$(ssh -i "$MEMORY_SSH_DIR/key" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             -o "UserKnownHostsFile=$MEMORY_SSH_DIR/known_hosts" "$MEMORY_DEPLOY_TARGET" \
-            "set -a; . '$MEMORY_DEPLOY_PATH/deploy/$DEPLOY_ENVIRONMENT/.env'; set +a; \
-             curl --fail --silent --show-error --max-time 30 \
-               -H \"Authorization: Bearer \$MEMORY_ADMIN_TOKEN\" '$MEMORY_SERVICE_ORIGIN/api/projects' >/dev/null && \
-             docker run --rm --network host -e MEMORY_ADMIN_TOKEN -e MEMORY_URL='$MEMORY_SERVICE_ORIGIN' \
-               'agent-memory:$RELEASE_SHA' python scripts/mcp_smoke.py"
+            "sed -n 's/^MEMORY_ADMIN_TOKEN=//p' '$MEMORY_DEPLOY_PATH/deploy/$DEPLOY_ENVIRONMENT/.env'")
+          if [[ -z "$TOKEN" ]]; then echo "No owner token available for ingress check" >&2; exit 1; fi
+          curl --fail --silent --show-error --max-time 30 \
+            -H "Authorization: Bearer $TOKEN" "$MEMORY_SERVICE_ORIGIN/api/projects" >/dev/null
+          umask 177
+          printf 'MEMORY_ADMIN_TOKEN=%s\n' "$TOKEN" > "$MEMORY_SSH_DIR/mcp.env"
+          docker run --rm --network host --env-file "$MEMORY_SSH_DIR/mcp.env" \
+            -e MEMORY_URL="$MEMORY_SERVICE_ORIGIN" "agent-memory:$RELEASE_SHA" \
+            python scripts/mcp_smoke.py
+          unset TOKEN
       - name: Report actual deployment outcome to the coordinator
         if: always()
         env:
