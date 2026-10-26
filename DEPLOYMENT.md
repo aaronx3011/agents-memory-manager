@@ -7,30 +7,45 @@ Local directory, coordinator project slug, Python package and image names remain
 
 ## Current state
 
-**The service is now deployed on the self-hosted worker machine `lesbian`
-(10.8.0.6) and no longer runs on the Mac.**
+**Runner and service are separated:**
 
-| Item | Value |
-| --- | --- |
-| Host | `lesbian`, `10.8.0.6`, Debian 13, x86_64 |
-| Path | `~/agent-memory` (`/opt` requires an unavailable sudo password) |
-| Compose project | `agent-memory-dev` |
-| Images | `agent-memory:7d10c17e668e1339134861e1175a33227ef045d1`, `agent-memory-db:7d10c17e…` |
-| App URL (VPN) | `http://10.8.0.6:8765` — UI, `/docs`, `/mcp/` |
-| App binding | Only `10.8.0.6:8765`; PostgreSQL is not published |
-| Data | Migrated owner identity, 1 project, 1 source memory, 1 checkpoint |
-| Hosted CI | Passed for `7d10c17` ([run](https://github.com/aaronx3011/agents-memory-manager/actions/runs/40378843294)) |
-| Local Mac runtime | Containers, volumes, `.env` and backups removed |
-| OpenCode | MCP and plugin repointed to `http://10.8.0.6:8765`; `opencode mcp list` connected |
+| Component | Host | Details |
+| --- | --- | --- |
+| GitHub Actions runner | `lesbian` (10.8.0.6) | `memory-runner-1`, labels `self-hosted, dev-runner`; only runners run here |
+| Memory app + DB | `personal-database` (10.8.0.11) | Compose project `agent-memory-dev`, path `~/agent-memory` |
+| App binding | 10.8.0.11:8765 | VPN interface only; PostgreSQL private to the stack |
+| OpenCode | Mac | MCP + plugin at `http://10.8.0.11:8765` |
 
-The deployment used the committed scripts and SHA images manually on the host,
-because GitHub Actions has no registered runner for this repository and
-`DEPLOY_ENABLED` is not set. The `ship` job therefore remains disabled until the
-runner and deployment inputs are configured. No HTTPS ingress is configured yet;
-access is over the encrypted WireGuard VPN and bound to the VPN interface.
+Latest verified release: `3a62a90e8e2a28308b09e4a3384bd2117fb5a5ae`.
+Pipeline run: <https://github.com/aaronx3011/agents-memory-manager/actions/runs/40388505252>.
 
-Initial publication and hosted CI verification are recorded in task #116. The
-deployment assets themselves were delivered by task #115.
+**CI/CD flow (working end-to-end):**
+
+```text
+push to main
+  -> GitHub-hosted verify (Python/DB/MCP/browser) ~1m15s
+  -> self-hosted runner on lesbian
+       builds app + custom pgvector images tagged with the commit SHA
+       docker save | gzip | ssh | docker load  -> 10.8.0.11
+       rsync deploy/ + scripts/
+  -> target deploy script
+       pre-update backup, start exact SHA, bootstrap, warmup
+       internal two-client MCP smoke
+  -> runner verifies the published origin
+       health, authenticated API, MCP smoke over the VPN address
+  -> coordinator receives the actual done/blocked outcome
+```
+
+Deployment settings are configured: GitHub environment `development`, secrets
+`DEV_HOST`, `DEV_SSH_USER`, `DEV_SSH_KEY`, `DEPLOY_KNOWN_HOSTS`, `COORDINATOR_*`,
+variables `DEPLOY_ENABLED=true`, `DEV_HEALTH_URL`, `DEV_DEPLOY_PATH`. A dedicated
+ed25519 deploy key is authorized on 10.8.0.11. The runner image is derived from the
+shared runner image with `python3` added for the pipeline steps.
+
+The earlier local Mac runtime is removed: containers, volumes, `.env`, and local
+backups were deleted after migration. The migrated store contains 1 project, 1
+source memory, and 1 checkpoint. There is **no HTTPS ingress yet**; access is over
+the encrypted WireGuard VPN.
 
 Implemented assets:
 
@@ -53,7 +68,8 @@ Implemented assets:
 The coordinator's `.github/workflows/deploy.yml` documents a self-hosted runner
 at `10.8.0.6`, labels `[self-hosted, dev-runner]`, image shipment using
 `docker save | gzip | ssh ... docker load`. Memory is deployed on that same
-worker machine (`10.8.0.6`); the coordinator's separate development host is `10.8.0.11`.
+runner host (10.8.0.6); memory itself is published to `10.8.0.11`. Only runners
+run on 10.8.0.6.
 Its production template uses a separately configured target and external proxy
 network, without a published web port. Its runner container uses host networking
 for VPN reachability. Operations issue:
@@ -110,7 +126,7 @@ Configure these **Actions variables**:
 | Variable | Example/purpose |
 | --- | --- |
 | `DEPLOY_ENABLED` | Repository-level variable: set to `true` after runner/host/settings are ready; otherwise CI runs and shipping is skipped |
-| `DEV_HEALTH_URL` | `http://10.8.0.6:8765/health` for the current worker deployment |
+| `DEV_HEALTH_URL` | `http://10.8.0.11:8765/health` for the current deployment |
 | `PROD_PUBLIC_HOST` | Dedicated memory HTTPS hostname, without scheme/path |
 
 Secrets in `agents-task-manager` are not automatically available in this repo.
@@ -130,7 +146,7 @@ development target (confirm these values for the actual host):
 
 ```sh
 python3 scripts/configure.py --environment development \
-  --bind-ip 10.8.0.6 --port 8765
+  --bind-ip 10.8.0.11 --port 8765
 ```
 
 For production, first confirm the existing HTTPS proxy's Docker network and memory

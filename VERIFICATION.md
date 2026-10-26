@@ -37,28 +37,35 @@ The browser test logs in, creates a sourced memory, inspects provenance, correct
 it, searches using hybrid recall, deletes current and superseded fixtures, and
 opens background job inspection. It checks for JavaScript page errors.
 
-## Worker deployment (2026-10-26)
+## Runner/service split and CI/CD (2026-10-26)
 
-Deployed to the self-hosted worker `lesbian` (10.8.0.6, Debian 13, x86_64), because
-the owner requires the memory service to run on the self-hosted worker machine, not
-the Mac. The service runs under `~/agent-memory` (sudo is password-protected, so
-`/opt` was not used) as Compose project `agent-memory-dev`.
+The owner clarified the intended topology: the self-hosted machine `lesbian`
+(10.8.0.6) must host only GitHub runners, while the memory service is published to
+another machine. The service was moved to `personal-database` (10.8.0.11).
 
 | Check | Result |
 | --- | --- |
-| x86_64 images built on the target | `agent-memory:7d10c17…` and `agent-memory-db:7d10c17…` |
-| Existing owner/project/memory/checkpoint migrated | **Passed**: 1 project, 1 memory, 1 checkpoint, 3 migrations |
-| `scripts/deploy.sh development <SHA>` on the worker | **Passed**: healthy app+DB, warmup, two-client MCP smoke |
-| Mac → VPN health and authenticated API | **Passed** |
-| Existing non-admin OpenCode agent key against remote | **Passed** |
-| OpenCode MCP reconnection | **Passed**: `opencode mcp list` shows `agent-memory connected` |
-| Network exposure | App listens only on `10.8.0.6:8765`; DB unpublished |
-| Local Mac runtime removed | Containers, volumes, network, `.env`, `.verification` and backups removed; port 8765 closed |
-| Private backup moved off the Mac | Copied to `~/agent-memory/backups` on the worker before local deletion |
+| Memory stack removed from `lesbian` | **Passed**: no memory containers/volumes; port 8765 closed |
+| Memory service on 10.8.0.11 | **Passed**: healthy app+DB, bound to 10.8.0.11:8765 only |
+| Data migrated again without loss | **Passed**: 1 project, 1 memory, 1 checkpoint |
+| Repository runner registered on `lesbian` | **Passed**: `memory-runner-1` online, labels `self-hosted, dev-runner` |
+| Runner image supports pipeline | Derived image adds `python3`; original shared runner untouched |
+| GitHub environment/secrets/variables | `development` configured; deploy key authorized on target |
+| Full CI/CD run | **Passed**: [run 40388505252](https://github.com/aaronx3011/agents-memory-manager/actions/runs/40388505252) |
+| Deployed release | `3a62a90e8e2a28308b09e4a3384bd2117fb5a5ae` |
+| Automatic pre-update backups | **Passed**: backups created for each pipeline release |
+| Runner-side ingress verification | Health + authenticated API + MCP smoke from the runner |
+| Coordinator reporting | Actual success/failure reported per deploy |
 
-Not verified/configured: HTTPS ingress, scheduled off-host backup replication, and
-the GitHub self-hosted `ship` job (no runner registered for this repository yet).
-The service is VPN-only over WireGuard at the time of writing.
+Fixes required during bring-up (all now verified in the green run):
+`--chmod` required BuildKit, so the DB Dockerfile uses a portable `RUN chmod`;
+the runner image lacked `python3`; `hashlib.file_digest` is unavailable on the
+target's Python 3.10; the ssh-keyscan comment line was mistaken for a host key;
+a bridge container cannot hairpin to the host VPN IP, so MCP ingress verification
+runs from the runner; transient port republication needed retry.
+
+Not configured: HTTPS ingress, scheduled off-host backup replication. Access is
+VPN-only over WireGuard.
 
 ## Deployment asset verification (#115)
 

@@ -3,6 +3,9 @@ name: Deploy memory
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - '.github/actionlint.yaml'
   workflow_dispatch:
     inputs:
       environment:
