@@ -51,11 +51,14 @@ jobs:
             HOST="$PROD_HOST"; SSH_USER="$PROD_SSH_USER"; KEY="$PROD_SSH_KEY"
             [[ "$PROD_PUBLIC_HOST" =~ ^[a-zA-Z0-9.-]+$ ]]
             HEALTH_URL="https://$PROD_PUBLIC_HOST/health"
+            DEPLOY_PATH="${{ vars.PROD_DEPLOY_PATH }}"
           else
             HOST="$DEV_HOST"; SSH_USER="$DEV_SSH_USER"; KEY="$DEV_SSH_KEY"
             HEALTH_URL="$DEV_HEALTH_URL"
+            DEPLOY_PATH="${{ vars.DEV_DEPLOY_PATH }}"
             [[ "$HEALTH_URL" == http://* || "$HEALTH_URL" == https://* ]]
           fi
+          [[ "$DEPLOY_PATH" =~ ^/[A-Za-z0-9._/-]+$ ]] || { echo "DEPLOY_PATH must be an absolute safe path" >&2; exit 1; }
           [[ "$HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.:-]*$ ]]
           [[ "$SSH_USER" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_-]*$ ]]
           test -n "$KEY"; test -n "$DEPLOY_KNOWN_HOSTS"
@@ -71,6 +74,7 @@ jobs:
             printf 'MEMORY_SSH_DIR=%s\n' "$SSH_DIR"
             printf 'MEMORY_HEALTH_URL=%s\n' "$HEALTH_URL"
             printf 'MEMORY_SERVICE_ORIGIN=%s\n' "$SERVICE_ORIGIN"
+            printf 'MEMORY_DEPLOY_PATH=%s\n' "$DEPLOY_PATH"
           } >> "$GITHUB_ENV"
       - name: Build SHA-tagged application and bootstrap database images
         run: |
@@ -86,22 +90,22 @@ jobs:
         run: |
           set -euo pipefail
           SSH="ssh -i $MEMORY_SSH_DIR/key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$MEMORY_SSH_DIR/known_hosts"
-          $SSH "$MEMORY_DEPLOY_TARGET" 'mkdir -p /opt/agent-memory/deploy /opt/agent-memory/scripts'
+          $SSH "$MEMORY_DEPLOY_TARGET" "mkdir -p '$MEMORY_DEPLOY_PATH/deploy' '$MEMORY_DEPLOY_PATH/scripts'"
           rsync -az --exclude=.env --exclude=.release --exclude=.previous-release \
             --exclude=.deploying --exclude=.deploy.lock --exclude=__pycache__ \
-            -e "$SSH" deploy/ "$MEMORY_DEPLOY_TARGET:/opt/agent-memory/deploy/"
-          rsync -az --exclude=__pycache__ -e "$SSH" scripts/ "$MEMORY_DEPLOY_TARGET:/opt/agent-memory/scripts/"
+            -e "$SSH" deploy/ "$MEMORY_DEPLOY_TARGET:$MEMORY_DEPLOY_PATH/deploy/"
+          rsync -az --exclude=__pycache__ -e "$SSH" scripts/ "$MEMORY_DEPLOY_TARGET:$MEMORY_DEPLOY_PATH/scripts/"
       - name: Deploy, back up updates and verify authenticated MCP internally
         run: |
           ssh -i "$MEMORY_SSH_DIR/key" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             -o "UserKnownHostsFile=$MEMORY_SSH_DIR/known_hosts" "$MEMORY_DEPLOY_TARGET" \
-            "bash /opt/agent-memory/scripts/deploy.sh $DEPLOY_ENVIRONMENT $RELEASE_SHA"
+            "bash $MEMORY_DEPLOY_PATH/scripts/deploy.sh $DEPLOY_ENVIRONMENT $RELEASE_SHA"
       - name: Verify ingress from the runner
         run: |
           curl --fail --silent --show-error --max-time 30 "$MEMORY_HEALTH_URL"
           ssh -i "$MEMORY_SSH_DIR/key" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             -o "UserKnownHostsFile=$MEMORY_SSH_DIR/known_hosts" "$MEMORY_DEPLOY_TARGET" \
-            "python3 /opt/agent-memory/scripts/environment.py --environment $DEPLOY_ENVIRONMENT -- exec -T -e MEMORY_URL=$MEMORY_SERVICE_ORIGIN app python scripts/mcp_smoke.py"
+            "python3 $MEMORY_DEPLOY_PATH/scripts/environment.py --environment $DEPLOY_ENVIRONMENT -- exec -T -e MEMORY_URL=$MEMORY_SERVICE_ORIGIN app python scripts/mcp_smoke.py"
       - name: Report actual deployment outcome to the coordinator
         if: always()
         env:
