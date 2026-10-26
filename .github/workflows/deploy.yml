@@ -69,6 +69,11 @@ jobs:
           printf '%s' "$KEY" | base64 --decode > "$SSH_DIR/key"
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$SSH_DIR/known_hosts"
           chmod 600 "$SSH_DIR/key" "$SSH_DIR/known_hosts"
+          # Fail fast with a clear error if the secret lacks a usable host key.
+          if ! awk 'NF >= 2 {print $1}' "$SSH_DIR/known_hosts" | grep -qx "$HOST"; then
+            echo "DEPLOY_KNOWN_HOSTS does not contain a key for $HOST" >&2
+            exit 1
+          fi
           {
             printf 'MEMORY_DEPLOY_TARGET=%s@%s\n' "$SSH_USER" "$HOST"
             printf 'MEMORY_SSH_DIR=%s\n' "$SSH_DIR"
