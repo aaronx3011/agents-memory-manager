@@ -1,0 +1,47 @@
+name: agent-memory
+services:
+  db:
+    build:
+      context: .
+      dockerfile: docker/db.Dockerfile
+    environment:
+      POSTGRES_DB: agent_memory
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run python3 scripts/configure.py first}
+      MEMORY_DB_PASSWORD: ${MEMORY_DB_PASSWORD:?Run python3 scripts/configure.py first}
+    volumes:
+      - memory-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d agent_memory"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgresql://memory_app:${MEMORY_DB_PASSWORD}@db:5432/agent_memory
+      MEMORY_ADMIN_TOKEN: ${MEMORY_ADMIN_TOKEN:?Run python3 scripts/configure.py first}
+      MEMORY_OWNER_ID: ${MEMORY_OWNER_ID}
+      EMBEDDING_MODEL: sentence-transformers/all-MiniLM-L6-v2
+      EMBEDDING_CACHE: /models
+      EXTRACTION_BASE_URL: ${EXTRACTION_BASE_URL:-}
+      EXTRACTION_API_KEY: ${EXTRACTION_API_KEY:-}
+      EXTRACTION_MODEL: ${EXTRACTION_MODEL:-}
+    ports:
+      - "127.0.0.1:${MEMORY_PORT:-8765}:8765"
+    volumes:
+      - memory-models:/models
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/health')"]
+      interval: 10s
+      timeout: 5s
+      start_period: 60s
+      retries: 12
+    restart: unless-stopped
+volumes:
+  memory-db:
+  memory-models:

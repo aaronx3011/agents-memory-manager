@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Agent Memory</title><link rel="stylesheet" href="/ui.css">
+  <script src="/ui.js" defer></script>
+</head>
+<body>
+  <header><div><span class="mark">am</span><strong>Agent Memory</strong><span class="subtitle">Persistent project knowledge</span></div><span id="health" class="badge">Connecting…</span></header>
+  <main>
+    <section id="login" class="panel narrow">
+      <h1>Your projects. One memory.</h1><p>Connect to your local memory service to search knowledge, resume work, and manage what your agents remember.</p>
+      <form id="login-form"><label for="token">Owner or scoped access token</label><input id="token" type="password" required autocomplete="off" placeholder="Paste your local access token"><button>Connect</button></form>
+      <p class="muted">Retrieve the owner token locally with <code>docker compose exec app agent-memory token</code>. The browser keeps it only in memory until you disconnect or refresh.</p>
+    </section>
+    <div id="workspace" hidden>
+      <div class="toolbar"><div><h1>Memory workspace</h1><p id="summary" class="muted">Loading projects…</p></div><div class="actions"><button id="jobs-button" class="secondary">Background jobs</button><button id="credentials-button" class="secondary">Access keys</button><button id="export-button" class="secondary">Export</button><button id="disconnect" class="secondary">Disconnect</button></div></div>
+      <section class="panel filters">
+        <div><label for="project-filter">Project</label><select id="project-filter"><option value="">All permitted projects + shared</option></select></div>
+        <div class="grow"><label for="query">Search by meaning or exact terms</label><form id="search-form" class="search-row"><input id="query" placeholder="What did we decide about database persistence?"><button>Search</button><button type="button" id="clear-search" class="secondary">Clear</button></form></div>
+      </section>
+      <div class="toolbar compact"><span id="retrieval-mode" class="muted">Recent memories</span><div class="actions"><button id="project-button" class="secondary">Register project</button><button id="create-button">+ Capture memory</button></div></div>
+      <div id="records" class="records"></div><button id="load-more" class="secondary" hidden>Load more</button>
+    </div>
+    <p id="message" role="status" aria-live="polite"></p>
+  </main>
+  <dialog id="project-dialog"><form id="project-form"><h2>Register a project</h2><label>Name<input name="name" required maxlength="150"></label><label>Repository URL (optional)<input name="repo_url"></label><label>Directory alias (optional)<input name="alias" placeholder="/absolute/path/to/project"></label><div class="actions"><button type="button" data-close class="secondary">Cancel</button><button>Register</button></div></form></dialog>
+  <dialog id="memory-dialog"><form id="memory-form"><h2 id="memory-heading">Capture memory</h2>
+    <label>Scope<select name="project_id" id="capture-project"><option value="">Owner-wide / shared</option></select></label>
+    <div class="form-row"><label>Type<select name="type"><option value="semantic">Semantic · facts</option><option value="episodic">Episodic · outcomes</option><option value="procedural">Procedural · workflows</option><option value="decision">Decision · rationale</option><option value="preference">Preference · conventions</option></select></label><label>Status<select name="status"><option>active</option><option>candidate</option><option>expired</option><option>disputed</option></select></label></div>
+    <label>Title<input name="title" required maxlength="300"></label><label>Knowledge<textarea name="content" rows="7" required maxlength="20000"></textarea></label>
+    <label>Source reference<input name="reference" required placeholder="Issue URL, commit/path, or dated user instruction"></label>
+    <div class="form-row"><label>Source kind<select name="source_kind"><option value="user">User statement</option><option value="repository">Repository</option><option value="task">Task</option><option value="session">Session</option><option value="document">Document</option><option value="test">Test</option></select></label><label>Evidence<select name="evidence"><option>reported</option><option>inferred</option><option>verified</option></select></label></div>
+    <div class="form-row"><label>Verified at (required for verified evidence)<input name="verified_at" type="datetime-local"></label><label>Review after (optional)<input name="review_after" type="datetime-local"></label></div>
+    <label>Tags (comma separated)<input name="tags"></label><div class="actions"><button type="button" data-close class="secondary">Cancel</button><button id="save-memory">Save memory</button></div>
+  </form></dialog>
+  <dialog id="detail-dialog"><div class="toolbar"><h2 id="detail-title"></h2><button data-close class="secondary">Close</button></div><div id="detail-body"></div><div class="actions"><button id="correct-button">Correct / replace</button><button id="promote-button" class="secondary">Activate candidate</button><button id="delete-button" class="danger">Forget memory</button></div></dialog>
+  <dialog id="jobs-dialog"><div class="toolbar"><h2>Background processing</h2><button data-close class="secondary">Close</button></div><p class="muted">Memories persist immediately. Embeddings and optional extraction process asynchronously.</p><div id="jobs-list"></div></dialog>
+  <dialog id="credentials-dialog"><div class="toolbar"><h2>Access keys</h2><button data-close class="secondary">Close</button></div><form id="credential-form"><label>Key name<input name="name" required></label><label>Project grants<select id="credential-projects" name="projects" multiple size="4"></select></label><label class="check"><input name="all_projects" type="checkbox"> Allow all current and future projects</label><label class="check"><input name="allow_shared" type="checkbox"> Allow owner-wide memory</label><label class="check"><input name="can_write" type="checkbox"> Allow capture, correction and checkpoints</label><button>Create scoped key</button></form><pre id="new-token" hidden></pre><div id="credentials-list"></div></dialog>
+</body>
+</html>

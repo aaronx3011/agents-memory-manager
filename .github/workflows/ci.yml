@@ -1,0 +1,54 @@
+name: Verify memory
+
+on:
+  pull_request:
+  push:
+    branches-ignore: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CI_PROJECT: agent-memory-ci-${{ github.run_id }}-${{ github.run_attempt }}
+      MEMORY_URL: http://127.0.0.1:18765
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: tests/browser/package-lock.json
+      - name: Start isolated real PostgreSQL/pgvector stack
+        run: |
+          python3 scripts/configure.py --port 18765
+          docker compose -p "$CI_PROJECT" up --build -d --wait --wait-timeout 600
+          docker compose -p "$CI_PROJECT" exec -T app agent-memory bootstrap
+          docker compose -p "$CI_PROJECT" exec -T app agent-memory warmup
+      - name: Python service and deployment checks
+        run: |
+          docker compose -p "$CI_PROJECT" run --rm --no-deps app pytest -q -p no:cacheprovider
+          docker compose -p "$CI_PROJECT" run --rm --no-deps app ruff check --no-cache src tests scripts
+      - name: Adapter and actual MCP network continuity
+        run: |
+          npm --prefix integrations/opencode test
+          docker compose -p "$CI_PROJECT" exec -T -e MEMORY_URL=http://127.0.0.1:8765 app python scripts/mcp_smoke.py
+      - name: Browser management workflow
+        working-directory: tests/browser
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npm test
+      - name: Failure diagnostics
+        if: failure()
+        run: docker compose -p "$CI_PROJECT" logs --tail 100 app
+      - name: Remove only this CI stack
+        if: always()
+        run: docker compose -p "$CI_PROJECT" down --volumes --remove-orphans

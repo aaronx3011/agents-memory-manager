@@ -1,0 +1,54 @@
+name: agent-memory-prod
+services:
+  db:
+    image: agent-memory-db:${IMAGE_TAG:?Select a full commit SHA}
+    pull_policy: never
+    environment:
+      POSTGRES_DB: agent_memory
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Provision production secrets explicitly}
+      MEMORY_DB_PASSWORD: ${MEMORY_DB_PASSWORD:?Provision production secrets explicitly}
+    volumes:
+      - memory-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d agent_memory"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+  app:
+    image: agent-memory:${IMAGE_TAG:?Select a full commit SHA}
+    pull_policy: never
+    environment:
+      DATABASE_URL: postgresql://memory_app:${MEMORY_DB_PASSWORD}@db:5432/agent_memory
+      MEMORY_ADMIN_TOKEN: ${MEMORY_ADMIN_TOKEN:?Provision production secrets explicitly}
+      MEMORY_OWNER_ID: ${MEMORY_OWNER_ID:?Provision production identity explicitly}
+      EMBEDDING_MODEL: sentence-transformers/all-MiniLM-L6-v2
+      EMBEDDING_CACHE: /models
+      EXTRACTION_BASE_URL: ${EXTRACTION_BASE_URL:-}
+      EXTRACTION_API_KEY: ${EXTRACTION_API_KEY:-}
+      EXTRACTION_MODEL: ${EXTRACTION_MODEL:-}
+    volumes:
+      - memory-models:/models
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      default:
+      proxy:
+        aliases:
+          - agent-memory-prod-app
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      start_period: 60s
+      retries: 18
+    restart: unless-stopped
+volumes:
+  memory-db:
+  memory-models:
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:?Set the existing HTTPS proxy Docker network}
+    external: true

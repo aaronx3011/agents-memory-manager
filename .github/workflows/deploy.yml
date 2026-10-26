@@ -1,0 +1,118 @@
+name: Deploy memory
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        type: choice
+        options: [development, production]
+        default: development
+
+permissions:
+  contents: read
+
+concurrency:
+  group: memory-ship-${{ inputs.environment || 'development' }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+  ship:
+    needs: verify
+    # Initial publication can run CI before this new repository has a VPN runner/settings.
+    if: vars.DEPLOY_ENABLED == 'true'
+    runs-on: [self-hosted, dev-runner]
+    environment: ${{ inputs.environment || 'development' }}
+    timeout-minutes: 30
+    env:
+      DEPLOY_ENVIRONMENT: ${{ inputs.environment || 'development' }}
+      RELEASE_SHA: ${{ github.sha }}
+      DEV_HOST: ${{ secrets.DEV_HOST }}
+      DEV_SSH_USER: ${{ secrets.DEV_SSH_USER }}
+      DEV_SSH_KEY: ${{ secrets.DEV_SSH_KEY }}
+      DEV_HEALTH_URL: ${{ vars.DEV_HEALTH_URL }}
+      PROD_HOST: ${{ secrets.PROD_HOST }}
+      PROD_SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+      PROD_PUBLIC_HOST: ${{ vars.PROD_PUBLIC_HOST }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate selected target and prepare private SSH state
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          [[ "$RELEASE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          if [[ "$DEPLOY_ENVIRONMENT" == production ]]; then
+            HOST="$PROD_HOST"; SSH_USER="$PROD_SSH_USER"; KEY="$PROD_SSH_KEY"
+            [[ "$PROD_PUBLIC_HOST" =~ ^[a-zA-Z0-9.-]+$ ]]
+            HEALTH_URL="https://$PROD_PUBLIC_HOST/health"
+          else
+            HOST="$DEV_HOST"; SSH_USER="$DEV_SSH_USER"; KEY="$DEV_SSH_KEY"
+            HEALTH_URL="$DEV_HEALTH_URL"
+            [[ "$HEALTH_URL" == http://* || "$HEALTH_URL" == https://* ]]
+          fi
+          [[ "$HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.:-]*$ ]]
+          [[ "$SSH_USER" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_-]*$ ]]
+          test -n "$KEY"; test -n "$DEPLOY_KNOWN_HOSTS"
+          export HEALTH_URL
+          SERVICE_ORIGIN="$(python3 -c 'import os,re; from urllib.parse import urlsplit; p=urlsplit(os.environ["HEALTH_URL"]); assert p.scheme in ("http","https") and p.path=="/health" and not p.query and not p.fragment and not p.username and not p.password and re.fullmatch(r"[A-Za-z0-9.:-]+",p.netloc); print(p.scheme+"://"+p.netloc)')"
+          SSH_DIR="$(mktemp -d "$RUNNER_TEMP/memory-ssh.XXXXXXXX")"
+          chmod 700 "$SSH_DIR"
+          printf '%s' "$KEY" | base64 --decode > "$SSH_DIR/key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$SSH_DIR/known_hosts"
+          chmod 600 "$SSH_DIR/key" "$SSH_DIR/known_hosts"
+          {
+            printf 'MEMORY_DEPLOY_TARGET=%s@%s\n' "$SSH_USER" "$HOST"
+            printf 'MEMORY_SSH_DIR=%s\n' "$SSH_DIR"
+            printf 'MEMORY_HEALTH_URL=%s\n' "$HEALTH_URL"
+            printf 'MEMORY_SERVICE_ORIGIN=%s\n' "$SERVICE_ORIGIN"
+          } >> "$GITHUB_ENV"
+      - name: Build SHA-tagged application and bootstrap database images
+        run: |
+          docker build --network host --tag "agent-memory:$RELEASE_SHA" .
+          docker build --network host --file docker/db.Dockerfile --tag "agent-memory-db:$RELEASE_SHA" .
+      - name: Ship images over the existing VPN/SSH route
+        run: |
+          set -euo pipefail
+          docker save "agent-memory:$RELEASE_SHA" "agent-memory-db:$RELEASE_SHA" | gzip | \
+            ssh -i "$MEMORY_SSH_DIR/key" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o "UserKnownHostsFile=$MEMORY_SSH_DIR/known_hosts" "$MEMORY_DEPLOY_TARGET" 'gunzip | docker load'
+      - name: Synchronize versioned deployment assets
+        run: |
+          set -euo pipefail
+          SSH="ssh -i $MEMORY_SSH_DIR/key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$MEMORY_SSH_DIR/known_hosts"
+          $SSH "$MEMORY_DEPLOY_TARGET" 'mkdir -p /opt/agent-memory/deploy /opt/agent-memory/scripts'
+          rsync -az --exclude=.env --exclude=.release --exclude=.previous-release \
+            --exclude=.deploying --exclude=.deploy.lock --exclude=__pycache__ \
+            -e "$SSH" deploy/ "$MEMORY_DEPLOY_TARGET:/opt/agent-memory/deploy/"
+          rsync -az --exclude=__pycache__ -e "$SSH" scripts/ "$MEMORY_DEPLOY_TARGET:/opt/agent-memory/scripts/"
+      - name: Deploy, back up updates and verify authenticated MCP internally
+        run: |
+          ssh -i "$MEMORY_SSH_DIR/key" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o "UserKnownHostsFile=$MEMORY_SSH_DIR/known_hosts" "$MEMORY_DEPLOY_TARGET" \
+            "bash /opt/agent-memory/scripts/deploy.sh $DEPLOY_ENVIRONMENT $RELEASE_SHA"
+      - name: Verify ingress from the runner
+        run: |
+          curl --fail --silent --show-error --max-time 30 "$MEMORY_HEALTH_URL"
+          ssh -i "$MEMORY_SSH_DIR/key" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o "UserKnownHostsFile=$MEMORY_SSH_DIR/known_hosts" "$MEMORY_DEPLOY_TARGET" \
+            "python3 /opt/agent-memory/scripts/environment.py --environment $DEPLOY_ENVIRONMENT -- exec -T -e MEMORY_URL=$MEMORY_SERVICE_ORIGIN app python scripts/mcp_smoke.py"
+      - name: Report actual deployment outcome to the coordinator
+        if: always()
+        env:
+          COORDINATOR_URL: ${{ secrets.COORDINATOR_URL }}
+          COORDINATOR_API_KEY: ${{ secrets.COORDINATOR_API_KEY }}
+          DEPLOY_OUTCOME: ${{ job.status }}
+          DEPLOY_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python3 scripts/report_deployment.py
+      - name: Remove temporary SSH credentials
+        if: always()
+        run: |
+          if [[ -n "${MEMORY_SSH_DIR:-}" && "$MEMORY_SSH_DIR" == "$RUNNER_TEMP"/memory-ssh.* ]]; then
+            rm -rf -- "$MEMORY_SSH_DIR"
+          fi
