@@ -110,7 +110,11 @@ jobs:
           curl --fail --silent --show-error --max-time 30 "$MEMORY_HEALTH_URL"
           ssh -i "$MEMORY_SSH_DIR/key" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             -o "UserKnownHostsFile=$MEMORY_SSH_DIR/known_hosts" "$MEMORY_DEPLOY_TARGET" \
-            "python3 $MEMORY_DEPLOY_PATH/scripts/environment.py --environment $DEPLOY_ENVIRONMENT -- exec -T -e MEMORY_URL=$MEMORY_SERVICE_ORIGIN app python scripts/mcp_smoke.py"
+            "set -a; . '$MEMORY_DEPLOY_PATH/deploy/$DEPLOY_ENVIRONMENT/.env'; set +a; \
+             curl --fail --silent --show-error --max-time 30 \
+               -H \"Authorization: Bearer \$MEMORY_ADMIN_TOKEN\" '$MEMORY_SERVICE_ORIGIN/api/projects' >/dev/null && \
+             docker run --rm --network host -e MEMORY_ADMIN_TOKEN -e MEMORY_URL='$MEMORY_SERVICE_ORIGIN' \
+               'agent-memory:$RELEASE_SHA' python scripts/mcp_smoke.py"
       - name: Report actual deployment outcome to the coordinator
         if: always()
         env:
