@@ -107,7 +107,19 @@ jobs:
             "bash $MEMORY_DEPLOY_PATH/scripts/deploy.sh $DEPLOY_ENVIRONMENT $RELEASE_SHA"
       - name: Verify ingress from the runner
         run: |
-          curl --fail --silent --show-error --max-time 30 "$MEMORY_HEALTH_URL"
+          # The target republishes its port when the app container is recreated;
+          # allow a short convergence window instead of a single transient probe.
+          healthy=0
+          for attempt in $(seq 1 12); do
+            if curl --fail --silent --max-time 5 "$MEMORY_HEALTH_URL" >/dev/null; then
+              healthy=1; break
+            fi
+            sleep 5
+          done
+          if [[ "$healthy" != 1 ]]; then
+            echo "Ingress health check failed for $MEMORY_HEALTH_URL" >&2
+            exit 1
+          fi
           ssh -i "$MEMORY_SSH_DIR/key" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             -o "UserKnownHostsFile=$MEMORY_SSH_DIR/known_hosts" "$MEMORY_DEPLOY_TARGET" \
             "set -a; . '$MEMORY_DEPLOY_PATH/deploy/$DEPLOY_ENVIRONMENT/.env'; set +a; \
