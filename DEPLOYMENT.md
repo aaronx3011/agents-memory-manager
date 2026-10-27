@@ -58,7 +58,7 @@ Confirm shipping, deployment, and authenticated ingress/MCP checks succeed befor
 reporting a release deployed. A healthy existing service or green CI alone does
 not prove the new release is live.
 
-### Last checked deployment incident — 2026-10-27
+### Resolved deployment incident — 2026-10-27
 
 The admin-panel release `649c856c4d7bda39f26c54940f86b254eb9e02d3` passed CI.
 [Deployment run 40534175678](https://github.com/aaronx3011/agents-memory-manager/actions/runs/40534175678)
@@ -66,9 +66,11 @@ ran on `memory-runner-1`, built the images, and failed shipping them because the
 runner's SSH connection to the target timed out on port 22. The third attempt
 ended at 16:03 UTC with the same error; the deployment and ingress steps did not
 run. GitHub briefly reported the runner offline, then online before that retry.
-Recheck live status and restore runner-to-target VPN/SSH access before retrying
-the failed job. This is a connectivity incident in an existing runner-based
-deployment setup, not a missing deployment pipeline.
+After connectivity recovered, attempt 4 succeeded at 16:09 UTC on the same
+`memory-runner-1`: image shipment, backup/update, internal MCP checks, and
+authenticated ingress verification all passed. The live dashboard at
+`http://10.8.0.11:8765` now serves the Manage projects panel and edit handler.
+This was a connectivity incident in an existing runner-based deployment setup.
 
 ## Deployment topology and last verified release
 
@@ -82,8 +84,8 @@ deployment setup, not a missing deployment pipeline.
 | OpenCode | Mac | MCP + plugin at `http://10.8.0.11:8765` |
 
 Last successful deployment verified through GitHub on 2026-10-27:
-`5c5aae45c0eec01146b08744f381b53b5506b47e`.
-Pipeline run: <https://github.com/aaronx3011/agents-memory-manager/actions/runs/40391106415>.
+`649c856c4d7bda39f26c54940f86b254eb9e02d3` (project administration panel).
+Pipeline run: <https://github.com/aaronx3011/agents-memory-manager/actions/runs/40534175678/attempts/4>.
 
 **CI/CD flow (proven by the successful run above; check live runner status):**
 
