@@ -5,7 +5,72 @@ Repository: <https://github.com/aaronx3011/agents-memory-manager>
 Local directory, coordinator project slug, Python package and image names remain
 `agent-memory`. The repository name is `agents-memory-manager`.
 
-## Current state
+## Deploy through GitHub Actions
+
+Use the repository's **Deploy memory** workflow for deployments, as requested by
+the owner. The agent's Mac only needs authenticated `gh` access to dispatch and
+monitor it; Docker builds and deployment SSH credentials are handled by runners.
+
+The workflow uses two runner types:
+
+- GitHub-hosted `ubuntu-24.04` runs the isolated verification stack.
+- Repository self-hosted `memory-runner-1`, labels `[self-hosted, dev-runner]`,
+  builds and ships the images over the VPN to `personal-database`.
+
+Check live runner availability and recent releases first:
+
+```sh
+gh api repos/aaronx3011/agents-memory-manager/actions/runners \
+  --jq '.runners[] | {name,status,busy,labels: [.labels[].name]}'
+gh run list --repo aaronx3011/agents-memory-manager \
+  --workflow deploy.yml --limit 5
+```
+
+Deploy a pushed feature branch directly to development without merging it:
+
+```sh
+gh workflow run deploy.yml --repo aaronx3011/agents-memory-manager \
+  --ref feat/135-project-admin-panel -f environment=development
+gh run list --repo aaronx3011/agents-memory-manager \
+  --workflow deploy.yml --branch feat/135-project-admin-panel --limit 5
+gh run watch RUN_ID --repo aaronx3011/agents-memory-manager --exit-status
+```
+
+Use the intended pushed branch or tag in `--ref`; the workflow verifies and deploys
+that ref's exact commit SHA. Pushes to `main` also deploy development automatically
+for non-documentation changes. Production uses an explicit manual dispatch with
+`-f environment=production` and separately configured production settings.
+
+Inspect failures and retry only failed jobs for the same release:
+
+```sh
+gh run view RUN_ID --repo aaronx3011/agents-memory-manager --log-failed
+gh run rerun RUN_ID --repo aaronx3011/agents-memory-manager --failed
+gh run watch RUN_ID --repo aaronx3011/agents-memory-manager --exit-status
+```
+
+An offline self-hosted runner leaves shipping queued; re-query GitHub because
+availability can change. A runner-to-target SSH timeout is a different failure:
+the runner executed the shipping job but could not reach the target on port 22.
+Local Mac SSH failure does not establish either condition. Inspect whether the
+deployment step ran before retrying, particularly after a partial migration.
+Confirm shipping, deployment, and authenticated ingress/MCP checks succeed before
+reporting a release deployed. A healthy existing service or green CI alone does
+not prove the new release is live.
+
+### Last checked deployment incident — 2026-10-27
+
+The admin-panel release `649c856c4d7bda39f26c54940f86b254eb9e02d3` passed CI.
+[Deployment run 40534175678](https://github.com/aaronx3011/agents-memory-manager/actions/runs/40534175678)
+ran on `memory-runner-1`, built the images, and failed shipping them because the
+runner's SSH connection to the target timed out on port 22. The third attempt
+ended at 16:03 UTC with the same error; the deployment and ingress steps did not
+run. GitHub briefly reported the runner offline, then online before that retry.
+Recheck live status and restore runner-to-target VPN/SSH access before retrying
+the failed job. This is a connectivity incident in an existing runner-based
+deployment setup, not a missing deployment pipeline.
+
+## Deployment topology and last verified release
 
 **Runner and service are separated:**
 
@@ -16,10 +81,11 @@ Local directory, coordinator project slug, Python package and image names remain
 | App binding | 10.8.0.11:8765 | VPN interface only; PostgreSQL private to the stack |
 | OpenCode | Mac | MCP + plugin at `http://10.8.0.11:8765` |
 
-Latest verified release: `3a62a90e8e2a28308b09e4a3384bd2117fb5a5ae`.
-Pipeline run: <https://github.com/aaronx3011/agents-memory-manager/actions/runs/40388505252>.
+Last successful deployment verified through GitHub on 2026-10-27:
+`5c5aae45c0eec01146b08744f381b53b5506b47e`.
+Pipeline run: <https://github.com/aaronx3011/agents-memory-manager/actions/runs/40391106415>.
 
-**CI/CD flow (working end-to-end):**
+**CI/CD flow (proven by the successful run above; check live runner status):**
 
 ```text
 push to main
@@ -43,8 +109,9 @@ ed25519 deploy key is authorized on 10.8.0.11. The runner image is derived from 
 shared runner image with `python3` added for the pipeline steps.
 
 The earlier local Mac runtime is removed: containers, volumes, `.env`, and local
-backups were deleted after migration. The migrated store contains 1 project, 1
-source memory, and 1 checkpoint. There is **no HTTPS ingress yet**; access is over
+backups were deleted after migration. At migration time the store contained 1
+project, 1 source memory, and 1 checkpoint; query the service for current counts.
+There is **no HTTPS ingress yet**; access is over
 the encrypted WireGuard VPN.
 
 Implemented assets:
@@ -67,8 +134,8 @@ Implemented assets:
 
 The coordinator's `.github/workflows/deploy.yml` documents a self-hosted runner
 at `10.8.0.6`, labels `[self-hosted, dev-runner]`, image shipment using
-`docker save | gzip | ssh ... docker load`. Memory is deployed on that same
-runner host (10.8.0.6); memory itself is published to `10.8.0.11`. Only runners
+`docker save | gzip | ssh ... docker load`. Memory images are built on that same
+runner host (10.8.0.6); the app and database run on `10.8.0.11`. Only runners
 run on 10.8.0.6.
 Its production template uses a separately configured target and external proxy
 network, without a published web port. Its runner container uses host networking
@@ -307,7 +374,9 @@ port, production app-only proxy membership and no production app host port. Brow
 mode checks the actual owner workflow on a random non-default development port.
 Only its own test networks/volumes/image aliases are removed.
 
-Remote prerequisites remaining: initial publication, repository runner access,
-GitHub environments/SSH/reporting inputs, host-private configuration, existing
-proxy/DNS values, backup destination/schedule and the actual rollout. See
-`VERIFICATION.md` for executed results rather than treating these prerequisites as done.
+Development publication, repository runner access, environment/SSH/reporting
+settings, host-private configuration, and initial rollout have been exercised by
+the successful GitHub runs linked above. Check current runner and VPN/SSH health
+for subsequent releases. Production ingress/proxy/DNS settings, off-host backup
+destination/schedule, and production rollout remain separately configured work.
+See `VERIFICATION.md` for executed checks.
