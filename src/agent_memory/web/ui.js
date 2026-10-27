@@ -1,11 +1,14 @@
 "use strict";
 const $ = (selector) => document.querySelector(selector);
 let token = "", projects = [], selected = null, correction = null, offset = 0, searching = false;
+let editingProject = null;
 function node(tag, text, className) {
   const el = document.createElement(tag); if (text !== undefined) el.textContent = text;
   if (className) el.className = className; return el;
 }
 function message(text, error = false) {
+  const dialogs = [...document.querySelectorAll("dialog[open]")];
+  (dialogs.at(-1) || $("main")).append($("#message"));
   $("#message").textContent = text; $("#message").className = `visible${error ? " error" : ""}`;
   clearTimeout(message.timer); message.timer = setTimeout(() => { $("#message").className = ""; }, 8000);
 }
@@ -31,9 +34,40 @@ async function refreshProjects() {
     const select = $(selector), value = select.value;
     while (select.options.length > (selector === "#credential-projects" ? 0 : 1)) select.remove(select.options.length - 1);
     for (const p of projects) { const option = node("option", p.name); option.value = p.id; select.append(option); }
-    select.value = value;
+    select.value = projects.some((p) => p.id === value) ? value : "";
   }
   $("#summary").textContent = `${projects.length} registered project${projects.length === 1 ? "" : "s"} · PostgreSQL + local semantic search`;
+  renderProjects();
+}
+function renderProjects() {
+  const list = $("#projects-list"); list.replaceChildren();
+  for (const project of projects) {
+    const item = node("div", undefined, "job");
+    item.append(node("h3", project.name), node("p", project.repo_url || "No repository URL", "muted"),
+      node("pre", project.aliases.join("\n") || "No directory aliases"));
+    const actions = node("div", undefined, "actions");
+    const edit = node("button", "Edit", "secondary");
+    edit.setAttribute("aria-label", `Edit ${project.name}`);
+    edit.onclick = () => editProject(project);
+    const remove = node("button", "Remove", "danger");
+    remove.setAttribute("aria-label", `Remove ${project.name}`);
+    remove.onclick = guard(async () => {
+      if (!confirm(`Remove project “${project.name}”? Its identity and access-key grants will be removed. Projects with stored data cannot be removed.`)) return;
+      await api(`/api/projects/${project.id}`, undefined, "DELETE");
+      await refreshProjects(); await loadRecords(); message("Project removed.");
+    });
+    actions.append(edit, remove); item.append(actions); list.append(item);
+  }
+  if (!projects.length) list.append(node("p", "No registered projects. Register your first project to get started.", "empty"));
+}
+function editProject(project = null) {
+  editingProject = project; const form = $("#project-form"); form.reset();
+  $("#project-heading").textContent = project ? "Edit project" : "Register a project";
+  $("#save-project").textContent = project ? "Save changes" : "Register";
+  form.elements.name.value = project?.name || "";
+  form.elements.repo_url.value = project?.repo_url || "";
+  form.elements.alias.value = project?.aliases.join("\n") || "";
+  $("#project-dialog").showModal();
 }
 async function loadRecords(append = false) {
   if (!append) offset = 0;
@@ -92,6 +126,8 @@ function editMemory(record = null) {
 }
 $("#login-form").onsubmit = guard(async () => {
   token = $("#token").value.trim(); await refreshProjects();
+  const session = await api("/api/session");
+  for (const id of ["#project-button", "#credentials-button", "#export-button"]) $(id).hidden = !session.can_manage;
   $("#token").value = ""; $("#login").hidden = true; $("#workspace").hidden = false;
   await loadRecords(); await health();
 });
@@ -101,11 +137,14 @@ $("#disconnect").onclick = () => {
   $("#new-token").textContent = ""; $("#workspace").hidden = true; $("#login").hidden = false;
 };
 document.querySelectorAll("[data-close]").forEach((el) => { el.onclick = () => el.closest("dialog").close(); });
-$("#project-button").onclick = () => $("#project-dialog").showModal();
+$("#project-button").onclick = guard(async () => { await refreshProjects(); $("#projects-dialog").showModal(); });
+$("#new-project-button").onclick = () => editProject();
 $("#project-form").onsubmit = guard(async () => {
   const form = $("#project-form");
-  await api("/api/projects", { name: form.elements.name.value, repo_url: form.elements.repo_url.value || null, aliases: form.elements.alias.value ? [form.elements.alias.value] : [] });
-  form.reset(); $("#project-dialog").close(); await refreshProjects(); message("Project registered centrally.");
+  const data = { name: form.elements.name.value.trim(), repo_url: form.elements.repo_url.value.trim() || null,
+    aliases: form.elements.alias.value.split("\n").map((alias) => alias.trim()).filter(Boolean) };
+  await api(editingProject ? `/api/projects/${editingProject.id}` : "/api/projects", data, editingProject ? "PUT" : "POST");
+  form.reset(); $("#project-dialog").close(); await refreshProjects(); await loadRecords(); message(editingProject ? "Project updated." : "Project registered centrally.");
 });
 $("#create-button").onclick = () => editMemory();
 $("#correct-button").onclick = () => { $("#detail-dialog").close(); editMemory(selected); };

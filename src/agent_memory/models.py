@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 MemoryType = Literal["episodic", "semantic", "procedural", "decision", "preference"]
 Status = Literal["candidate", "active", "superseded", "expired", "disputed"]
@@ -16,6 +16,19 @@ class ProjectInput(StrictModel):
     name: str = Field(min_length=1, max_length=150)
     repo_url: str | None = Field(default=None, max_length=1000)
     aliases: list[str] = Field(default_factory=list, max_length=30)
+
+    @field_validator("name", "repo_url", mode="before")
+    @classmethod
+    def trim_identity(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("aliases")
+    @classmethod
+    def clean_aliases(cls, value):
+        aliases = list(dict.fromkeys(alias.strip() for alias in value))
+        if any(not alias or len(alias) > 2000 for alias in aliases):
+            raise ValueError("Aliases must contain 1–2000 non-whitespace characters")
+        return aliases
 
 
 class Source(StrictModel):

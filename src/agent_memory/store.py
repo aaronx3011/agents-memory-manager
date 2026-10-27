@@ -125,6 +125,42 @@ class Store:
             self._audit(conn, p, "project.create", row["id"])
         return public(row)
 
+    def update_project(self, p, project_id, data):
+        p.manage()
+        with self.db.transaction(p.owner_id) as conn:
+            self._project(conn, p, project_id, write=True)
+            try:
+                row = conn.execute(
+                    "UPDATE projects SET name=%s,repo_url=%s,aliases=%s WHERE id=%s RETURNING *",
+                    (data.name, data.repo_url, Jsonb(data.aliases), project_id),
+                ).fetchone()
+            except UniqueViolation:
+                fail(409, "Project name already exists")
+            if not row:
+                fail(404, "Project not found")
+            self._audit(conn, p, "project.update", project_id)
+        return public(row)
+
+    def delete_project(self, p, project_id):
+        p.manage()
+        with self.db.transaction(p.owner_id) as conn:
+            row = conn.execute("SELECT id FROM projects WHERE id=%s FOR UPDATE", (project_id,)).fetchone()
+            if not row:
+                fail(404, "Project not found")
+            # The row lock serializes deletion with foreign-key writers.
+            for table in ("memories", "checkpoints", "jobs"):
+                if conn.execute(
+                    f"SELECT 1 FROM {table} WHERE project_id=%s LIMIT 1", (project_id,),
+                ).fetchone():
+                    fail(409, "Project contains memories, checkpoints, or jobs. Remove its stored data before deleting it.")
+            conn.execute(
+                "UPDATE credentials SET project_ids=array_remove(project_ids,%s) WHERE %s=ANY(project_ids)",
+                (project_id, project_id),
+            )
+            conn.execute("DELETE FROM projects WHERE id=%s", (project_id,))
+            self._audit(conn, p, "project.delete", project_id)
+        return {"deleted": True, "id": str(project_id)}
+
     def resolve_project(self, p, identity):
         matches = [r for r in self.projects(p) if identity in (
             r["id"], r["name"], r["repo_url"], *r["aliases"],

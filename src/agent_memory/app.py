@@ -92,6 +92,18 @@ def create_app(settings=None, embedder=None):
     def resolve_project(identity: str, p=Depends(principal)):
         return store.resolve_project(p, identity)
 
+    @app.get("/api/session")
+    def session(p=Depends(principal)):
+        return {"can_manage": p.admin}
+
+    @app.put("/api/projects/{project_id}")
+    def update_project(project_id: UUID, data: ProjectInput, p=Depends(principal)):
+        return store.update_project(p, project_id, data)
+
+    @app.delete("/api/projects/{project_id}")
+    def delete_project(project_id: UUID, p=Depends(principal)):
+        return store.delete_project(p, project_id)
+
     @app.get("/api/credentials")
     def credentials(p=Depends(principal)):
         return store.credentials(p)
