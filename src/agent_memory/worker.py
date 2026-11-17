@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import threading
@@ -6,6 +7,7 @@ from uuid import uuid4
 import httpx
 from psycopg.types.json import Jsonb
 
+from .chunking import build_passages, fallback_counts
 from .models import CaptureInput, MemoryInput
 from .store import Principal
 
@@ -58,7 +60,8 @@ class Worker:
                 "WHERE id=%s", (lease, job["id"]),
             )
             memory = conn.execute(
-                "SELECT id,title,content,content_hash,project_id,sources FROM memories WHERE id=%s",
+                "SELECT id,title,content,content_hash,project_id,sources,revision "
+                "FROM memories WHERE id=%s",
                 (job["memory_id"],),
             ).fetchone()
         try:
@@ -66,27 +69,8 @@ class Worker:
                 return True
             if job["kind"] == "embedding":
                 vector = self.embedder.embed(memory["title"] + "\n" + memory["content"])
-                with self.store.db.transaction(owner) as conn:
-                    # All mutators lock the canonical memory before its jobs. Reversing
-                    # this order deadlocks against deletion's ON DELETE CASCADE.
-                    live = conn.execute(
-                        "SELECT id FROM memories WHERE id=%s FOR UPDATE", (memory["id"],),
-                    ).fetchone()
-                    # Deletion cascades jobs; this check prevents resurrection or stale completion.
-                    active_lease = conn.execute(
-                        "SELECT id FROM jobs WHERE id=%s AND lease_id=%s FOR UPDATE",
-                        (job["id"], lease),
-                    ).fetchone()
-                    if live and active_lease:
-                        conn.execute(
-                            "UPDATE memories SET embedding=%s,embedding_model=%s "
-                            "WHERE id=%s AND content_hash=%s",
-                            (vector, self.embedder.model_name, memory["id"], memory["content_hash"]),
-                        )
-                        conn.execute(
-                            "UPDATE jobs SET status='done',payload='{}',error=NULL WHERE id=%s",
-                            (job["id"],),
-                        )
+                passages = self.build_passages(memory)
+                self.finish_embedding(owner, job, lease, memory, vector, passages)
             else:
                 extracted = self.extract(memory)
                 with self.store.db.transaction(owner) as conn:
@@ -122,6 +106,60 @@ class Worker:
                     (type(exc).__name__, job["id"], lease),
                 )
         return True
+
+    def build_passages(self, memory):
+        """Deterministic token-aware splitting; falls back to a character-based
+        estimate when the tokenizer cannot load. Content is never rewritten."""
+        try:
+            count_fn = self.embedder.token_counts
+        except Exception:
+            count_fn = fallback_counts
+        try:
+            return build_passages(count_fn, memory["content"])
+        except Exception:
+            return build_passages(fallback_counts, memory["content"])
+
+    def finish_embedding(self, owner, job, lease, memory, vector, passages):
+        """Persist the memory vector and its passage set in one transaction.
+        The full passage set of the current content replaces prior rows, so a
+        retried job after a partial failure still converges idempotently."""
+        passages = list(passages)
+        vectors = self.embedder.embed_batch([text for text, _ in passages]) if passages else []
+        with self.store.db.transaction(owner) as conn:
+            # All mutators lock the canonical memory before its jobs. Reversing
+            # this order deadlocks against deletion's ON DELETE CASCADE.
+            live = conn.execute(
+                "SELECT id FROM memories WHERE id=%s FOR UPDATE", (memory["id"],),
+            ).fetchone()
+            # Deletion cascades jobs; this check prevents resurrection or stale completion.
+            active_lease = conn.execute(
+                "SELECT id FROM jobs WHERE id=%s AND lease_id=%s FOR UPDATE",
+                (job["id"], lease),
+            ).fetchone()
+            if live and active_lease:
+                conn.execute(
+                    "UPDATE memories SET embedding=%s,embedding_model=%s "
+                    "WHERE id=%s AND content_hash=%s",
+                    (vector, self.embedder.model_name, memory["id"], memory["content_hash"]),
+                )
+                conn.execute(
+                    "DELETE FROM memory_passages WHERE memory_id=%s", (memory["id"],),
+                )
+                for ordinal, ((text, tokens), passage_vector) in enumerate(zip(passages, vectors)):
+                    content_hash = hashlib.sha256(
+                        (memory["content_hash"] + ":" + text).encode(),
+                    ).hexdigest()
+                    conn.execute(
+                        "INSERT INTO memory_passages(owner_id,memory_id,project_id,revision,"
+                        "ordinal,token_count,text,content_hash,embedding,embedding_model) "
+                        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                        (owner, memory["id"], memory["project_id"], memory["revision"], ordinal,
+                         tokens, text, content_hash, passage_vector, self.embedder.model_name),
+                    )
+                conn.execute(
+                    "UPDATE jobs SET status='done',payload='{}',error=NULL WHERE id=%s",
+                    (job["id"],),
+                )
 
     def extract(self, memory):
         settings = self.store.settings

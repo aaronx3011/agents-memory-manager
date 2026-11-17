@@ -22,7 +22,8 @@ def client():
         with app.state.db.transaction(settings.owner_id) as conn:
             conn.execute("UPDATE memories SET supersedes=NULL")
             for table in ("memory_links", "revisions", "jobs", "captures", "checkpoints",
-                          "memories", "credentials", "audit_events", "tombstones", "projects"):
+                          "memory_passages", "memories", "credentials", "audit_events",
+                          "tombstones", "projects"):
                 conn.execute(f"DELETE FROM {table}")
 
 

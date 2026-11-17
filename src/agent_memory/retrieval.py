@@ -3,6 +3,26 @@ import json
 from .store import public
 
 
+def _merge_semantic(whole, part):
+    """Combine whole-record and per-passage candidates keyed by memory id,
+    keeping whichever best matches the query plus its passage excerpt."""
+    merged: dict = {}
+    for row in whole:
+        item = dict(row)
+        item["match"] = {"kind": "record", "similarity": row["similarity"]}
+        merged[str(row["id"])] = item
+    for row in part:
+        key = str(row["id"])
+        candidate = dict(row)
+        candidate["match"] = {
+            "kind": "passage", "ordinal": row["passage_ordinal"],
+            "similarity": row["similarity"], "tokens": row["passage_tokens"],
+        }
+        if key not in merged or candidate["similarity"] > merged[key]["similarity"]:
+            merged[key] = candidate
+    return sorted(merged.values(), key=lambda r: (-r["similarity"], r["id"]))
+
+
 class Retrieval:
     def __init__(self, store, embedder):
         self.store, self.embedder = store, embedder
@@ -30,18 +50,37 @@ class Retrieval:
             ).fetchall()
             semantic = []
             if vector is not None:
-                semantic = conn.execute(
-                    f"SELECT *,1-(embedding <=> %s) AS similarity FROM memories WHERE {clause} "
-                    "AND embedding IS NOT NULL AND embedding_model=%s "
-                    "AND 1-(embedding <=> %s)>0.20 ORDER BY embedding <=> %s,id LIMIT 80",
+                # Best embedding match per memory: whole record first, then its
+                # token-aware passages, which win when they are closer to the query.
+                whole = conn.execute(
+                    f"SELECT m.*,1-(m.embedding <=> %s) AS similarity "
+                    f"FROM memories m WHERE m.id IN (SELECT id FROM memories WHERE {clause} "
+                    "AND status='active') AND m.embedding IS NOT NULL AND m.embedding_model=%s "
+                    "AND 1-(m.embedding <=> %s)>0.20 ORDER BY m.embedding <=> %s,m.id LIMIT 80",
                     (vector, *params, self.embedder.model_name, vector, vector),
                 ).fetchall()
+                part = conn.execute(
+                    f"SELECT m.*,b.ordinal AS passage_ordinal,b.text AS passage_text,"
+                    f"b.token_count AS passage_tokens,b.similarity "
+                    f"FROM (SELECT DISTINCT ON (memory_id) memory_id,ordinal,text,token_count,"
+                    f"1-(embedding <=> %s) AS similarity FROM memory_passages "
+                    f"WHERE embedding_model=%s AND 1-(embedding <=> %s)>0.20 "
+                    f"ORDER BY memory_id,similarity DESC) b "
+                    f"JOIN memories m ON m.id=b.memory_id "
+                    f"WHERE m.id IN (SELECT id FROM memories WHERE {clause} AND status='active') "
+                    f"ORDER BY b.similarity DESC,m.id LIMIT 80",
+                    (vector, self.embedder.model_name, vector, *params),
+                ).fetchall()
+                semantic = _merge_semantic(whole, part)
         candidates, scores = {}, {}
         for rows in (keyword, semantic):
             for rank, row in enumerate(rows, start=1):
                 key = str(row["id"])
                 candidates.setdefault(key, row).update(row)
                 scores[key] = scores.get(key, 0) + 1 / (60 + rank)
+        # Overlapping passages must not crowd the result list: report each
+        # match once per memory with its highest-similarity excerpt.
+        EXCERPT_LIMIT = 1200
         results = []
         for key, row in candidates.items():
             item = public(row)
@@ -50,6 +89,19 @@ class Retrieval:
                 weight *= 0.9
             item["score"] = scores[key] * weight
             item.pop("rank", None)
+            match = row.pop("match", None) if "match" in row else None
+            if match and match.get("kind") == "passage":
+                text = row.get("passage_text") or ""
+                item["passage"] = {
+                    "ordinal": match["ordinal"], "tokens": match.get("tokens"),
+                    "similarity": match["similarity"],
+                    "text": text[:EXCERPT_LIMIT],
+                    "truncated": len(text) > EXCERPT_LIMIT,
+                }
+            item.pop("passage_text", None)
+            item.pop("passage_ordinal", None)
+            item.pop("passage_tokens", None)
+            item.pop("similarity", None)
             results.append(item)
         results.sort(key=lambda r: (-r["score"], r["id"]))
         return {"mode": mode, "results": results[:data.limit],
@@ -103,8 +155,17 @@ class Retrieval:
                 "id", "project_id", "type", "title", "revision", "status", "evidence",
                 "verified_at", "review_after", "stale", "sources",
             )}
-            item["excerpt"] = row["content"][:1800]
-            item["truncated"] = len(row["content"]) > 1800
+            passage = row.get("passage")
+            if passage:
+                item["excerpt"] = passage["text"][:1800]
+                item["excerpt_source"] = {
+                    "kind": "passage", "ordinal": passage["ordinal"],
+                    "tokens": passage.get("tokens"),
+                }
+                item["truncated"] = passage["truncated"] or len(passage["text"]) > 1800
+            else:
+                item["excerpt"] = row["content"][:1800]
+                item["truncated"] = len(row["content"]) > 1800
             result["memories"].append(item)
             if size() + 100 > data.max_chars:
                 result["memories"].pop()

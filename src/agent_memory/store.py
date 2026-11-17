@@ -301,6 +301,90 @@ class Store:
                                 or r["project_id"] in p.project_ids
                                 or (r["project_id"] is None and p.allow_shared)]}
 
+    def vector_view(self, p, memory_id):
+        from .vectors import as_array, cosine, project, vector_stats
+        with self.db.transaction(p.owner_id) as conn:
+            row = self._record(conn, p, memory_id)
+            record_vector = (as_array(row["embedding"])
+                             if row["embedding"] is not None else None)
+            passages = conn.execute(
+                "SELECT ordinal,token_count,text,embedding,embedding_model "
+                "FROM memory_passages WHERE memory_id=%s ORDER BY ordinal",
+                (memory_id,),
+            ).fetchall()
+            job = conn.execute(
+                "SELECT id,status,attempts,error,created_at FROM jobs "
+                "WHERE memory_id=%s AND kind='embedding' "
+                "ORDER BY created_at DESC LIMIT 1",
+                (memory_id,),
+            ).fetchone()
+            neighbors = []
+            if record_vector is not None and row["embedding_model"]:
+                if row["project_id"] is None:
+                    scope, params = "project_id IS NULL", []
+                elif p.admin or p.allow_shared:
+                    scope = "(project_id=%s OR project_id IS NULL)"
+                    params = [row["project_id"]]
+                else:
+                    scope, params = "project_id=%s", [row["project_id"]]
+                neighbors = conn.execute(
+                    f"SELECT id,title,project_id,embedding,"
+                    f"1-(embedding <=> %s) AS similarity FROM memories "
+                    f"WHERE {scope} AND status='active' AND id<>%s "
+                    "AND embedding IS NOT NULL AND embedding_model=%s "
+                    "ORDER BY embedding <=> %s,id LIMIT 8",
+                    (record_vector, *params, memory_id, row["embedding_model"],
+                     record_vector),
+                ).fetchall()
+        entries, vectors = [], []
+        if record_vector is not None:
+            vectors.append(record_vector)
+            entries.append({"kind": "record"})
+        passage_items = []
+        for passage in passages:
+            item = {
+                "ordinal": passage["ordinal"], "tokens": passage["token_count"],
+                "model": passage["embedding_model"], "text": passage["text"][:300],
+                "stats": None, "cosine_to_record": None,
+            }
+            if passage["embedding"] is not None:
+                item["stats"] = vector_stats(passage["embedding"])
+                item["cosine_to_record"] = cosine(record_vector, passage["embedding"])
+                vectors.append(passage["embedding"])
+                entries.append({"kind": "passage", "ordinal": passage["ordinal"]})
+            passage_items.append(item)
+        neighbor_items = []
+        for rank, neighbor in enumerate(neighbors, start=1):
+            neighbor_items.append({
+                "rank": rank, "id": str(neighbor["id"]), "title": neighbor["title"],
+                "project_id": (str(neighbor["project_id"])
+                               if neighbor["project_id"] is not None else None),
+                "similarity": round(float(neighbor["similarity"]), 5),
+            })
+            vectors.append(neighbor["embedding"])
+            entries.append({"kind": "neighbor", "rank": rank})
+        projection = project(vectors)
+        points = []
+        for entry, coordinate in zip(entries, projection["coordinates"]):
+            point = {**entry, "x": coordinate[0], "y": coordinate[1]}
+            if entry["kind"] == "neighbor":
+                point["id"] = neighbor_items[entry["rank"] - 1]["id"]
+            points.append(point)
+        return {
+            "memory": {
+                "id": str(row["id"]), "title": row["title"],
+                "project_id": (str(row["project_id"])
+                               if row["project_id"] is not None else None),
+            },
+            "embedding_model": row["embedding_model"],
+            "embedding": {
+                "present": record_vector is not None, "model": row["embedding_model"],
+                "stats": vector_stats(record_vector) if record_vector is not None else None,
+            },
+            "passages": passage_items, "neighbors": neighbor_items,
+            "projection": {**projection, "points": points}, "job": public(job),
+        }
+
     def link(self, p, memory_id, data):
         with self.db.transaction(p.owner_id) as conn:
             source = self._record(conn, p, memory_id)

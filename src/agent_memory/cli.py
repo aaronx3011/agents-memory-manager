@@ -1,5 +1,6 @@
 import argparse
 import json
+from uuid import uuid4
 
 from .config import Settings
 from .db import Database
@@ -11,9 +12,10 @@ from .worker import Worker
 
 def main():
     parser = argparse.ArgumentParser(description="Local agent-memory administration")
-    parser.add_argument("command", choices=["bootstrap", "status", "warmup", "token"])
+    parser.add_argument("command", choices=["bootstrap", "status", "warmup", "token", "reindex"])
     parser.add_argument("--directory", help="Explicit client directory alias for bootstrap")
     parser.add_argument("--repository", help="Repository URL for bootstrap")
+    parser.add_argument("--limit", type=int, default=500, help="Maximum jobs processed for reindex")
     args = parser.parse_args()
     settings = Settings.from_env()
     if args.command == "token":
@@ -55,6 +57,27 @@ def main():
             while processed < 500 and worker.process_one():
                 processed += 1
             print(json.dumps({"model_ready": embedder.ready, "jobs_processed": processed}))
+        elif args.command == "reindex":
+            # One-time/idempotent backfill: memories lacking passages for the
+            # current embedding model get a fresh durable embedding job. Content
+            # is not rewritten; only derived passage rows are (re)built.
+            embedder = Embedder(settings)
+            with db.transaction(p.owner_id) as conn:
+                rows = conn.execute(
+                    "INSERT INTO jobs(id,owner_id,project_id,memory_id,kind) "
+                    "SELECT %s,owner_id,project_id,id,'embedding' FROM memories m "
+                    "WHERE m.status IN ('active','candidate') "
+                    "AND NOT EXISTS (SELECT 1 FROM memory_passages mp "
+                    "WHERE mp.memory_id=m.id AND mp.embedding_model=%s) "
+                    "RETURNING id",
+                    (uuid4(), embedder.model_name),
+                ).fetchall()
+            stats = {"enqueued": len(rows), "processed": 0}
+            embedder.embed("Persistent project memory")
+            worker = Worker(store, embedder)
+            while stats["processed"] < max(1, args.limit) and worker.process_one():
+                stats["processed"] += 1
+            print(json.dumps(stats, default=str))
         else:
             with db.transaction(p.owner_id) as conn:
                 print(json.dumps({

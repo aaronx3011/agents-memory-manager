@@ -129,6 +129,10 @@ def create_app(settings=None, embedder=None):
     def get(memory_id: UUID, p=Depends(principal)):
         return store.get(p, memory_id)
 
+    @app.get("/api/memories/{memory_id}/vectors")
+    def vectors(memory_id: UUID, p=Depends(principal)):
+        return store.vector_view(p, memory_id)
+
     @app.post("/api/memories/{memory_id}/correct", status_code=201)
     def correct(memory_id: UUID, data: CorrectionInput, p=Depends(principal)):
         return store.correct(p, memory_id, data)

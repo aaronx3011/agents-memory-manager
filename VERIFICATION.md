@@ -1,5 +1,40 @@
 # Local MVP and deployment verification
 
+## Per-memory vector inspection (#309)
+
+Verified 2026-11-17 on an isolated PostgreSQL/pgvector stack created from the
+existing `agent-memory-db` and `agent-memory` images on `personal-database`, with
+the working tree mounted read-only and the cached MiniLM model. Test owners and
+projects were separate from the live development store.
+
+- `GET /api/memories/{id}/vectors` returns the stored embedding model, 384
+  dimensions, norm/mean/spread/range, rounded component values, passage vectors
+  with token counts and cosine agreement to the record, up to eight nearest
+  memories in the permitted scope, the latest embedding job, and a deterministic
+  2D PCA projection of the record, its passages and neighbours.
+- A long fixture record produced 8 passages and 1 neighbour; the projection
+  contained 10 points with PC1 57.84% and PC2 16.72%.
+- Pending embedding jobs return `present=false` with no values or points instead
+  of an error. Scoped credentials receive 404 for unpermitted memories, and
+  neighbour/projection points exclude other projects and ungranted shared memory.
+- The dashboard record dialog now exposes **Vector view**: component bars, a
+  selectable passage list with mini-signals, a collision-aware PCA map, and
+  nearest-memory similarity bars. Selecting a passage updates the main signal and
+  highlights its map point; neighbour rows open that record.
+
+Executed checks (isolated stack):
+
+```text
+python -m pytest -q -p no:cacheprovider                         54 passed
+python -m ruff check --no-cache src tests                       All checks passed
+npx playwright test (vector view and existing workspace specs)   3 passed
+```
+
+The Chromium workflow logs in, searches for a captured record, opens **Vector
+view**, verifies 384 dimensions, passage selection, PCA output, the neighbour row,
+and that both canvases contain painted pixels. The feature was verified in the working tree before release; live deployment is
+verified separately.
+
 2026-10-26 · Tasks #106–#108 and #115 · Python 3.12 / PostgreSQL 17 / pgvector / ARM64 Docker
 
 ## Executed checks

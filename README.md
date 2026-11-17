@@ -56,6 +56,9 @@ No memory directories or notes need to be added to those projects.
 - **Management UI:** project registration, capture, search, provenance/history,
   correction, candidate activation, deletion, scoped key issuance/revocation,
   background job inspection/retry, JSON export.
+- **Vector inspection:** a per-memory view exposes the stored dimensions and
+  component signal, passage-level vectors with cosine agreement, nearest
+  memories, and a PCA map of the selected record, its passages and neighbours.
 - **Deletion:** purges canonical text, vectors, revisions, explicitly derived
   memories, and checkpoints referencing deleted IDs. Tombstones support replay
   during restore. Backups have their own retention.
@@ -197,6 +200,8 @@ Browser tests require the running local app and its `.env`. They create/delete
 clearly labeled synthetic memories in `agent-memory`. Python tests cover scope/RLS,
 concurrency, idempotency, sources/history, semantic recall, fallback, budgets,
 checkpoints, MCP transport, extraction contracts, job failures and deletion races.
+Vector inspection is covered by HTTP scope/pending/math tests and a Chromium workflow
+that opens the dashboard view and verifies both canvases render.
 
 ## Backup, restore and persistence
 
