@@ -25,7 +25,7 @@ projects were separate from the live development store.
 Executed checks (isolated stack):
 
 ```text
-python -m pytest -q -p no:cacheprovider                         54 passed
+python -m pytest -q -p no:cacheprovider                         51 passed
 python -m ruff check --no-cache src tests                       All checks passed
 npx playwright test (vector view and existing workspace specs)   3 passed
 ```
