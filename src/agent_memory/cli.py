@@ -1,6 +1,5 @@
 import argparse
 import json
-from uuid import uuid4
 
 from .config import Settings
 from .db import Database
@@ -8,6 +7,21 @@ from .embeddings import Embedder
 from .models import CaptureInput, ProjectInput
 from .store import Store
 from .worker import Worker
+
+
+def enqueue_missing_passages(conn, embedding_model):
+    """Enqueue one durable embedding job for each memory lacking passages for
+    this model. Jobs get independent IDs; a single shared UUID would violate the
+    jobs primary key on the first multi-row backfill."""
+    return conn.execute(
+        "INSERT INTO jobs(id,owner_id,project_id,memory_id,kind) "
+        "SELECT gen_random_uuid(),owner_id,project_id,id,'embedding' FROM memories m "
+        "WHERE m.status IN ('active','candidate') "
+        "AND NOT EXISTS (SELECT 1 FROM memory_passages mp "
+        "WHERE mp.memory_id=m.id AND mp.embedding_model=%s) "
+        "RETURNING id",
+        (embedding_model,),
+    ).fetchall()
 
 
 def main():
@@ -63,15 +77,7 @@ def main():
             # is not rewritten; only derived passage rows are (re)built.
             embedder = Embedder(settings)
             with db.transaction(p.owner_id) as conn:
-                rows = conn.execute(
-                    "INSERT INTO jobs(id,owner_id,project_id,memory_id,kind) "
-                    "SELECT %s,owner_id,project_id,id,'embedding' FROM memories m "
-                    "WHERE m.status IN ('active','candidate') "
-                    "AND NOT EXISTS (SELECT 1 FROM memory_passages mp "
-                    "WHERE mp.memory_id=m.id AND mp.embedding_model=%s) "
-                    "RETURNING id",
-                    (uuid4(), embedder.model_name),
-                ).fetchall()
+                rows = enqueue_missing_passages(conn, embedder.model_name)
             stats = {"enqueued": len(rows), "processed": 0}
             embedder.embed("Persistent project memory")
             worker = Worker(store, embedder)

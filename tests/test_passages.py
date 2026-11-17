@@ -1,6 +1,7 @@
 import json
 from uuid import UUID
 
+from agent_memory.cli import enqueue_missing_passages
 from agent_memory.models import SearchInput
 
 from conftest import record
@@ -186,6 +187,25 @@ def test_backfill_query_targets_only_memories_lacking_current_model_passages(cli
             (embedding_model,),
         ).fetchone()["n"]
     assert remaining == 0
+
+
+def test_reindex_enqueues_independent_jobs_for_each_memory(client, project):
+    first = long_memory(client, project)
+    second = long_memory(client, project)
+    drain(client)
+    with client.app.state.db.transaction(
+        client.app.state.store.settings.owner_id,
+    ) as conn:
+        conn.execute("DELETE FROM memory_passages")
+        rows = enqueue_missing_passages(
+            conn, client.app.state.retrieval.embedder.model_name,
+        )
+    job_ids = [str(row["id"]) for row in rows]
+    assert len(job_ids) == 2
+    assert len(set(job_ids)) == 2
+    drain(client)
+    assert len(passages(client, first["id"])) > 1
+    assert len(passages(client, second["id"])) > 1
 
 
 def test_passages_respect_project_scope_and_grants(client, project):
