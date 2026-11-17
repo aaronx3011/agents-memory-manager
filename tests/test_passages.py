@@ -193,7 +193,7 @@ def test_reindex_enqueues_independent_jobs_for_each_memory(client, project):
     first = long_memory(client, project)
     second = client.post("/api/memories", json=record(
         project["id"], title="Backup restoration procedure",
-        content=long_document(paragraphs=12),
+        content=long_document(paragraphs=24),
     )).json()
     drain(client)
     with client.app.state.db.transaction(
