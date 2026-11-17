@@ -83,9 +83,13 @@ This was a connectivity incident in an existing runner-based deployment setup.
 | App binding | 10.8.0.11:8765 | VPN interface only; PostgreSQL private to the stack |
 | OpenCode | Mac | MCP + plugin at `http://10.8.0.11:8765` |
 
-Last successful deployment verified through GitHub on 2026-10-27:
+Last successful deployment verified through GitHub on 2026-11-17:
+`0988242ab72ffa3cc0f4997b03510be6627eb381` (token-aware passages and vector
+inspection). Pipeline run:
+<https://github.com/aaronx3011/agents-memory-manager/actions/runs/44110104645>.
+The release applied the additive passage migration and ran the one-time reindex;
+381 records now have passage vectors. Previous verified release:
 `649c856c4d7bda39f26c54940f86b254eb9e02d3` (project administration panel).
-Pipeline run: <https://github.com/aaronx3011/agents-memory-manager/actions/runs/40534175678/attempts/4>.
 
 **CI/CD flow (proven by the successful run above; check live runner status):**
 

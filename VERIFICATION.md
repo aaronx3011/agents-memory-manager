@@ -32,8 +32,17 @@ npx playwright test (vector view and existing workspace specs)   3 passed
 
 The Chromium workflow logs in, searches for a captured record, opens **Vector
 view**, verifies 384 dimensions, passage selection, PCA output, the neighbour row,
-and that both canvases contain painted pixels. The feature was verified in the working tree before release; live deployment is
-verified separately.
+and that both canvases contain painted pixels. Deployed on 2026-11-17 as
+`0988242ab72ffa3cc0f4997b03510be6627eb381` through deploy workflow run
+[44110104645](https://github.com/aaronx3011/agents-memory-manager/actions/runs/44110104645).
+The workflow's clean checkout passed 52 Python tests, ruff, the adapter/MCP smoke
+and Chromium, and the pre-update backup completed. `agent-memory reindex --limit
+500` then enqueued 380 backfill jobs; all completed (188 through the CLI and the
+remainder through the service worker), and 381 records now have passages. A live
+vector response for an existing memory returned 384 dimensions, 2 passages, 8
+neighbours, 11 PCA points (PC1 26.64%, PC2 18.71%) and a done job. The Chromium
+vector workflow also passed against the live dashboard at `http://10.8.0.11:8765`.
+
 
 2026-10-26 · Tasks #106–#108 and #115 · Python 3.12 / PostgreSQL 17 / pgvector / ARM64 Docker
 
