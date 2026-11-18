@@ -74,3 +74,30 @@ def project(vectors):
         "coordinates": [[round(float(x), 5), round(float(y), 5)]
                         for x, y in normalized],
     }
+
+
+def nearest_pairs(vectors, limit=3, threshold=0.6):
+    rows = [as_array(vector) for vector in vectors]
+    if len(rows) < 2 or not all(row.size for row in rows):
+        return []
+    try:
+        matrix = np.stack(rows)
+    except ValueError:
+        return []
+    if matrix.ndim != 2 or len({row.shape for row in rows}) != 1:
+        return []
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    if np.any(norms == 0):
+        return []
+    scores = (matrix / norms) @ (matrix / norms).T
+    np.fill_diagonal(scores, -np.inf)
+    pairs = {}
+    for index in range(scores.shape[0]):
+        for neighbor in np.argsort(-scores[index], kind="stable")[:limit]:
+            score = float(scores[index, neighbor])
+            if score < threshold:
+                break
+            left, right = sorted((index, int(neighbor)))
+            pairs[(left, right)] = max(score, pairs.get((left, right), -1.0))
+    return [(left, right, round(score, 5))
+            for (left, right), score in sorted(pairs.items())]

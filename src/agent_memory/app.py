@@ -121,6 +121,13 @@ def create_app(settings=None, embedder=None):
                  offset: int = Query(0, ge=0), p=Depends(principal)):
         return store.list_memories(p, project_id, limit, offset)
 
+    @app.get("/api/map")
+    def memory_map(project_id: UUID | None = None, limit: int = Query(400, ge=1, le=500),
+                   neighbors: int = Query(3, ge=1, le=8),
+                   min_similarity: float = Query(0.6, ge=-1, le=1),
+                   p=Depends(principal)):
+        return store.map_view(p, project_id, limit, neighbors, min_similarity)
+
     @app.post("/api/memories", status_code=201)
     def capture(data: CaptureInput, p=Depends(principal)):
         return store.capture(p, data)

@@ -385,6 +385,78 @@ class Store:
             "projection": {**projection, "points": points}, "job": public(job),
         }
 
+    def map_view(self, p, project_id=None, limit=400, neighbors=3, min_similarity=0.6):
+        from collections import defaultdict
+
+        from .models import SearchInput
+        from .vectors import nearest_pairs
+
+        data = SearchInput(query="map", project_id=project_id,
+                           cross_project=project_id is None)
+        clause, params = self.scope_filter(p, data)
+        with self.db.transaction(p.owner_id) as conn:
+            rows = conn.execute(
+                f"SELECT id,project_id,type,title,status,evidence,review_after,"
+                f"embedding,embedding_model,updated_at FROM memories WHERE {clause} "
+                "AND status IN ('active','candidate','disputed') "
+                "ORDER BY updated_at DESC,id LIMIT %s",
+                (*params, limit + 1),
+            ).fetchall()
+            truncated = len(rows) > limit
+            rows = rows[:limit]
+            ids = [row["id"] for row in rows]
+            links = conn.execute(
+                "SELECT source_id,target_id,kind FROM memory_links "
+                "WHERE source_id=ANY(%s) AND target_id=ANY(%s)",
+                (ids, ids),
+            ).fetchall() if ids else []
+        now = datetime.now(timezone.utc)
+        nodes = [{
+            "id": str(row["id"]),
+            "project_id": (str(row["project_id"])
+                           if row["project_id"] is not None else None),
+            "type": row["type"], "title": row["title"], "status": row["status"],
+            "evidence": row["evidence"],
+            "stale": bool(row["review_after"] and row["review_after"] < now),
+        } for row in rows]
+        node_ids = {node["id"] for node in nodes}
+        priority = {"contradicts": 3, "derived_from": 2, "relates_to": 1}
+        edge_by_pair = {}
+        for link in links:
+            source, target = str(link["source_id"]), str(link["target_id"])
+            if source not in node_ids or target not in node_ids:
+                continue
+            pair = tuple(sorted((source, target)))
+            previous = edge_by_pair.get(pair)
+            if not previous or priority[link["kind"]] > priority[previous["kind"]]:
+                edge_by_pair[pair] = {"source": source, "target": target,
+                                      "kind": link["kind"]}
+        vectors = {str(row["id"]): row["embedding"] for row in rows
+                   if row["embedding"] is not None}
+        groups = defaultdict(list)
+        for row in rows:
+            if row["embedding"] is not None and row["embedding_model"]:
+                groups[(str(row["project_id"]), row["embedding_model"])].append(str(row["id"]))
+        inferred = []
+        for group in groups.values():
+            pairs = nearest_pairs([vectors[memory_id] for memory_id in group],
+                                  limit=neighbors, threshold=min_similarity)
+            for left, right, similarity in pairs:
+                source, target = group[left], group[right]
+                pair = tuple(sorted((source, target)))
+                if pair in edge_by_pair:
+                    continue
+                inferred.append({"source": source, "target": target,
+                                 "kind": "similarity", "similarity": similarity})
+        edges = list(edge_by_pair.values()) + inferred
+        degree = {node["id"]: 0 for node in nodes}
+        for edge in edges:
+            degree[edge["source"]] += 1
+            degree[edge["target"]] += 1
+        for node in nodes:
+            node["degree"] = degree[node["id"]]
+        return {"nodes": nodes, "edges": edges, "truncated": truncated}
+
     def link(self, p, memory_id, data):
         with self.db.transaction(p.owner_id) as conn:
             source = self._record(conn, p, memory_id)

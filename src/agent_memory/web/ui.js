@@ -1,7 +1,7 @@
 "use strict";
 const $ = (selector) => document.querySelector(selector);
 let token = "", projects = [], selected = null, correction = null, offset = 0, searching = false;
-let editingProject = null, vectorFocus = null;
+let editingProject = null, vectorFocus = null, mapState = null;
 function node(tag, text, className) {
   const el = document.createElement(tag); if (text !== undefined) el.textContent = text;
   if (className) el.className = className; return el;
@@ -261,6 +261,298 @@ async function showVectors() {
   renderVectorLegend(); renderVectorPassages(data);
   drawVectorMap(data); renderVectorNeighbors(data);
 }
+const celestialTypeColors = {
+  episodic: "#6fa8ff", semantic: "#8bd5c1", procedural: "#c4a2ff",
+  decision: "#f2c17b", preference: "#ef8fb2",
+};
+const celestialEdgeStyles = {
+  similarity: ["#5d7596", 0.34, []],
+  relates_to: ["#8bd5c1", 0.62, []],
+  derived_from: ["#6fa8ff", 0.76, [5, 4]],
+  contradicts: ["#ef8fb2", 0.9, [2, 5]],
+};
+function hashNumber(value) {
+  let hash = 2166136261;
+  for (const character of String(value)) {
+    hash ^= character.charCodeAt(0); hash = Math.imul(hash, 16777619);
+  }
+  return Math.abs(hash);
+}
+function projectColor(id) {
+  return `hsl(${hashNumber(id || "owner-wide") % 360} 66% 68%)`;
+}
+function celestialNodeColor(item) {
+  return mapState?.colorBy === "type"
+    ? celestialTypeColors[item.type] || "#95a6bc" : projectColor(item.project_id);
+}
+function celestialBackground(width, height) {
+  const canvas = document.createElement("canvas");
+  canvas.width = width; canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  const glow = ctx.createRadialGradient(width * 0.5, height * 0.5, 20,
+    width * 0.5, height * 0.5, width * 0.72);
+  glow.addColorStop(0, "#0d1a2b"); glow.addColorStop(1, "#04070d");
+  ctx.fillStyle = glow; ctx.fillRect(0, 0, width, height);
+  let seed = hashNumber("celestial-map") || 1;
+  const random = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+  for (let index = 0; index < 320; index++) {
+    const radius = random() > 0.93 ? 1.4 : 0.55;
+    ctx.globalAlpha = 0.16 + random() * 0.7;
+    ctx.fillStyle = random() > 0.82 ? "#cfe6ff" : "#8fa8c4";
+    ctx.beginPath(); ctx.arc(random() * width, random() * height, radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  return canvas;
+}
+function prepareCelestial(data) {
+  const width = 1000, height = 620, count = Math.max(1, data.nodes.length);
+  const nodes = data.nodes.map((item, index) => {
+    const angle = index * 2.399963229728653;
+    const spread = Math.sqrt((index + 1) / count);
+    return {
+      ...item, x: width / 2 + Math.cos(angle) * spread * width * 0.38,
+      y: height / 2 + Math.sin(angle) * spread * height * 0.38,
+      vx: 0, vy: 0, degree: 0, radius: 3.5,
+    };
+  });
+  const ids = new Set(nodes.map((item) => item.id));
+  const edges = data.edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target));
+  const byId = new Map(nodes.map((item) => [item.id, item]));
+  for (const edge of edges) {
+    byId.get(edge.source).degree += 1; byId.get(edge.target).degree += 1;
+  }
+  for (const item of nodes) {
+    item.radius = 3.2 + Math.min(9, Math.sqrt(item.degree) * 2.6)
+      + (item.status === "active" ? 0.7 : 0);
+  }
+  return {
+    source: data, nodes, edges, byId, width, height, scale: 1, panX: 0, panY: 0,
+    background: celestialBackground(width, height), ticks: 0, frame: 0,
+    hover: null, pointer: null, dragging: null, colorBy: "project",
+  };
+}
+function simulateCelestial(state) {
+  const alpha = Math.max(0.06, 1 - state.ticks / 300);
+  const nodes = state.nodes;
+  for (let left = 0; left < nodes.length; left++) {
+    for (let right = left + 1; right < nodes.length; right++) {
+      const a = nodes[left], b = nodes[right];
+      let dx = b.x - a.x, dy = b.y - a.y;
+      let distance = Math.hypot(dx, dy);
+      if (distance < 0.01) { dx = 0.01; dy = 0.01; distance = 0.014; }
+      const force = Math.min(4.5, 1150 / (distance * distance)) * alpha;
+      const fx = (dx / distance) * force, fy = (dy / distance) * force;
+      a.vx -= fx; a.vy -= fy; b.vx += fx; b.vy += fy;
+    }
+  }
+  for (const edge of state.edges) {
+    const a = state.byId.get(edge.source), b = state.byId.get(edge.target);
+    if (!a || !b) continue;
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const distance = Math.hypot(dx, dy) || 0.01;
+    const desired = edge.kind === "similarity" ? 150 : 105;
+    const strength = edge.kind === "similarity" ? 0.0045 : 0.009;
+    const force = Math.max(-3, Math.min(3, (distance - desired) * strength * alpha));
+    const fx = (dx / distance) * force, fy = (dy / distance) * force;
+    a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy;
+  }
+  const centerX = state.width / 2, centerY = state.height / 2;
+  for (const item of nodes) {
+    if (item === state.dragging) { item.vx = 0; item.vy = 0; continue; }
+    item.vx += (centerX - item.x) * 0.0012 * alpha;
+    item.vy += (centerY - item.y) * 0.0012 * alpha;
+    item.vx *= 0.88; item.vy *= 0.88;
+    item.x += item.vx; item.y += item.vy;
+    item.x = Math.max(42, Math.min(state.width - 42, item.x));
+    item.y = Math.max(42, Math.min(state.height - 42, item.y));
+  }
+}
+function drawCelestial() {
+  const state = mapState, canvas = $("#map-canvas");
+  if (!state || !canvas) return;
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, state.width, state.height);
+  ctx.drawImage(state.background, 0, 0);
+  if (!state.nodes.length) {
+    ctx.fillStyle = "#95a6bc"; ctx.font = "14px system-ui";
+    ctx.fillText("No current memories in this scope yet.", 42, 62);
+    return;
+  }
+  ctx.save();
+  ctx.translate(state.panX, state.panY); ctx.scale(state.scale, state.scale);
+  for (const edge of state.edges) {
+    const a = state.byId.get(edge.source), b = state.byId.get(edge.target);
+    if (!a || !b) continue;
+    const [color, opacity, dash] = celestialEdgeStyles[edge.kind] || celestialEdgeStyles.similarity;
+    ctx.strokeStyle = color; ctx.globalAlpha = opacity;
+    ctx.lineWidth = (edge.kind === "similarity" ? 0.9 : 1.3) / state.scale;
+    ctx.setLineDash(dash.map((value) => value / state.scale));
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  for (const item of state.nodes) {
+    const color = celestialNodeColor(item);
+    ctx.globalAlpha = 0.07; ctx.fillStyle = color;
+    ctx.beginPath(); ctx.arc(item.x, item.y, item.radius * 3.2, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 0.2;
+    ctx.beginPath(); ctx.arc(item.x, item.y, item.radius * 1.8, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 0.96;
+    ctx.beginPath(); ctx.arc(item.x, item.y, item.radius, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1; ctx.fillStyle = "#f7fcff";
+    ctx.beginPath(); ctx.arc(item.x, item.y, Math.max(1.2, item.radius * 0.38), 0, Math.PI * 2);
+    ctx.fill();
+    if (item.stale) {
+      ctx.strokeStyle = "#f2c17b"; ctx.lineWidth = 1.2 / state.scale;
+      ctx.beginPath(); ctx.arc(item.x, item.y, item.radius + 3, 0, Math.PI * 2); ctx.stroke();
+    }
+    if (item === state.hover || item === state.dragging) {
+      ctx.strokeStyle = "#f2c17b"; ctx.lineWidth = 2 / state.scale;
+      ctx.beginPath(); ctx.arc(item.x, item.y, item.radius + 5, 0, Math.PI * 2); ctx.stroke();
+    }
+  }
+  ctx.restore();
+  ctx.globalAlpha = 1; ctx.setLineDash([]);
+  const labels = state.nodes.filter((item) => item === state.hover || item === state.dragging
+    || item.degree >= 3 || state.scale >= 1.35)
+    .sort((a, b) => b.degree - a.degree).slice(0, state.hover ? 60 : 38);
+  const placed = [];
+  ctx.font = "11px system-ui"; ctx.textBaseline = "middle";
+  for (const item of labels) {
+    const x = item.x * state.scale + state.panX, y = item.y * state.scale + state.panY;
+    const text = item.title.length > 42 ? `${item.title.slice(0, 41)}…` : item.title;
+    const width = ctx.measureText(text).width + 10;
+    const box = { left: x + 8, top: y - 9, right: x + 8 + width, bottom: y + 9 };
+    if (item !== state.hover && placed.some((other) => box.left < other.right
+      && box.right > other.left && box.top < other.bottom && box.bottom > other.top)) continue;
+    placed.push(box);
+    ctx.fillStyle = "rgba(5, 9, 18, 0.76)";
+    ctx.fillRect(box.left, box.top, width, 18);
+    ctx.fillStyle = item === state.hover ? "#f2c17b" : "#b7c7d9";
+    ctx.fillText(text, x + 13, y);
+  }
+}
+function animateCelestial() {
+  const state = mapState;
+  if (!state) return;
+  cancelAnimationFrame(state.frame);
+  const tick = () => {
+    if (!mapState || mapState !== state) return;
+    if (state.ticks < 420) {
+      simulateCelestial(state); state.ticks += 1; drawCelestial();
+      state.frame = state.ticks < 420 ? requestAnimationFrame(tick) : 0;
+    }
+  };
+  state.frame = requestAnimationFrame(tick);
+}
+function celestialPoint(event) {
+  const canvas = $("#map-canvas"), rect = canvas.getBoundingClientRect();
+  const sx = (event.clientX - rect.left) * (canvas.width / rect.width);
+  const sy = (event.clientY - rect.top) * (canvas.height / rect.height);
+  return { sx, sy, x: (sx - mapState.panX) / mapState.scale,
+    y: (sy - mapState.panY) / mapState.scale };
+}
+function celestialHit(point) {
+  if (!mapState) return null;
+  let best = null, bestDistance = Infinity;
+  for (const item of mapState.nodes) {
+    const x = item.x * mapState.scale + mapState.panX;
+    const y = item.y * mapState.scale + mapState.panY;
+    const distance = Math.hypot(point.sx - x, point.sy - y);
+    const reach = Math.max(9, item.radius * mapState.scale + 8);
+    if (distance < reach && distance < bestDistance) { best = item; bestDistance = distance; }
+  }
+  return best;
+}
+function showMapTooltip(event, item) {
+  const tooltip = $("#map-tooltip"), shell = $(".map-shell");
+  if (!item) { tooltip.hidden = true; return; }
+  tooltip.replaceChildren(
+    node("strong", item.title),
+    node("small", `${projectName(item.project_id)} · ${item.type} · ${item.status}`),
+    node("small", `${item.degree} relation${item.degree === 1 ? "" : "s"}${item.stale ? " · review due" : ""}`),
+  );
+  tooltip.hidden = false;
+  const rect = shell.getBoundingClientRect();
+  tooltip.style.left = `${Math.min(event.clientX - rect.left + 14, rect.width - 250)}px`;
+  tooltip.style.top = `${Math.max(10, event.clientY - rect.top + 14)}px`;
+}
+function fitCelestial() {
+  const state = mapState;
+  if (!state || !state.nodes.length) return;
+  cancelAnimationFrame(state.frame); state.frame = 0; state.ticks = 420;
+  const xs = state.nodes.map((item) => item.x), ys = state.nodes.map((item) => item.y);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const scale = Math.max(0.35, Math.min(2.4, (state.width - 150) / Math.max(1, maxX - minX),
+    (state.height - 130) / Math.max(1, maxY - minY)));
+  state.scale = scale;
+  state.panX = state.width / 2 - ((minX + maxX) / 2) * scale;
+  state.panY = state.height / 2 - ((minY + maxY) / 2) * scale;
+  drawCelestial();
+}
+function resetCelestial() {
+  if (!mapState) return;
+  const data = mapState.source;
+  mapState = prepareCelestial(data);
+  $("#map-color").textContent = "Color: project";
+  drawCelestial(); if (data.nodes.length) animateCelestial();
+}
+function renderMapLegend(data) {
+  const legend = $("#map-legend"); legend.replaceChildren();
+  if (mapState?.colorBy === "type") {
+    const types = [...new Set(data.nodes.map((item) => item.type))];
+    for (const type of types) {
+      const item = node("span", type, "project");
+      item.style.color = celestialTypeColors[type] || "#95a6bc"; legend.append(item);
+    }
+  } else {
+    const projectIds = [...new Set(data.nodes.map((item) => item.project_id))];
+    for (const id of projectIds.slice(0, 8)) {
+      const item = node("span", projectName(id), "project");
+      item.style.color = projectColor(id); legend.append(item);
+    }
+    if (projectIds.length > 8) {
+      legend.append(node("span", `+${projectIds.length - 8} projects`, "muted"));
+    }
+  }
+  for (const [kind, text] of [["relates_to", "Related"], ["derived_from", "Derived"],
+    ["contradicts", "Contradicts"], ["similarity", "Semantic thread"]]) {
+    const item = node("span", text, "edge"); item.style.color = celestialEdgeStyles[kind][0];
+    legend.append(item);
+  }
+}
+function renderMapIndex(data) {
+  const index = $("#map-index"); index.replaceChildren();
+  const ordered = [...data.nodes].sort((a, b) => projectName(a.project_id).localeCompare(
+    projectName(b.project_id)) || a.title.localeCompare(b.title));
+  for (const item of ordered) {
+    const row = node("button", undefined, "map-index-row"), body = node("span", undefined, "grow");
+    body.append(node("strong", item.title),
+      node("small", `${projectName(item.project_id)} · ${item.type} · ${item.degree} relations`));
+    row.append(body); row.onclick = guard(async () => {
+      $("#map-dialog").close(); await showDetail(item.id);
+    });
+    index.append(row);
+  }
+}
+async function showMap() {
+  $("#map-dialog").showModal();
+  $("#map-summary").textContent = "Charting relationships…";
+  $("#map-legend").replaceChildren(); $("#map-index").replaceChildren();
+  $("#map-tooltip").hidden = true;
+  const project = $("#project-filter").value;
+  const data = await api(`/api/map?limit=400${project ? `&project_id=${project}` : ""}`);
+  if (!$("#map-dialog").open) return;
+  mapState = prepareCelestial(data);
+  const explicit = data.edges.filter((edge) => edge.kind !== "similarity").length;
+  $("#map-summary").textContent = data.nodes.length
+    ? `${data.nodes.length} stars · ${explicit} linked paths · ${data.edges.length - explicit} semantic threads${data.truncated ? " · recent 400 shown" : ""}`
+    : "No current memories in this scope.";
+  renderMapLegend(data); renderMapIndex(data);
+  drawCelestial(); if (data.nodes.length) animateCelestial();
+}
 async function showDetail(id) {
   selected = await api(`/api/memories/${id}`);
   $("#detail-title").textContent = selected.title;
@@ -314,6 +606,77 @@ $("#project-form").onsubmit = guard(async () => {
 });
 $("#create-button").onclick = () => editMemory();
 $("#vector-button").onclick = guard(showVectors);
+$("#map-button").onclick = guard(showMap);
+$("#map-fit").onclick = guard(() => fitCelestial());
+$("#map-reset").onclick = guard(() => { resetCelestial(); $("#map-color").textContent = "Color: project"; });
+$("#map-color").onclick = guard(() => {
+  if (!mapState) return;
+  mapState.colorBy = mapState.colorBy === "project" ? "type" : "project";
+  $("#map-color").textContent = `Color: ${mapState.colorBy}`;
+  renderMapLegend(mapState.source); drawCelestial();
+});
+$("#map-dialog").addEventListener("close", () => {
+  if (mapState) cancelAnimationFrame(mapState.frame);
+  mapState = null; $("#map-tooltip").hidden = true;
+});
+const mapCanvas = $("#map-canvas");
+mapCanvas.addEventListener("pointerdown", (event) => {
+  if (!mapState) return;
+  const point = celestialPoint(event), hit = celestialHit(point);
+  mapState.pointer = {
+    type: hit ? "node" : "pan", node: hit, startX: event.clientX, startY: event.clientY,
+    offsetX: hit ? hit.x - point.x : 0, offsetY: hit ? hit.y - point.y : 0,
+    panX: mapState.panX, panY: mapState.panY, moved: false,
+  };
+  mapState.dragging = hit;
+  $("#map-tooltip").hidden = true;
+  mapCanvas.classList.add("dragging");
+  mapCanvas.setPointerCapture(event.pointerId);
+});
+mapCanvas.addEventListener("pointermove", (event) => {
+  if (!mapState) return;
+  const pointer = mapState.pointer, point = celestialPoint(event);
+  if (pointer) {
+    if (Math.hypot(event.clientX - pointer.startX, event.clientY - pointer.startY) > 4) {
+      pointer.moved = true;
+    }
+    if (pointer.type === "node") {
+      pointer.node.x = point.x + pointer.offsetX; pointer.node.y = point.y + pointer.offsetY;
+      mapState.ticks = Math.min(mapState.ticks, 300); drawCelestial(); animateCelestial();
+    } else {
+      mapState.panX = pointer.panX + event.clientX - pointer.startX;
+      mapState.panY = pointer.panY + event.clientY - pointer.startY; drawCelestial();
+    }
+    return;
+  }
+  const hit = celestialHit(point);
+  if (hit !== mapState.hover) { mapState.hover = hit; drawCelestial(); }
+  showMapTooltip(event, hit);
+});
+mapCanvas.addEventListener("pointerup", (event) => {
+  if (!mapState) return;
+  const pointer = mapState.pointer;
+  mapState.pointer = null; mapState.dragging = null;
+  mapCanvas.classList.remove("dragging");
+  if (pointer && !pointer.moved && pointer.node) {
+    const id = pointer.node.id; $("#map-dialog").close();
+    showDetail(id).catch((error) => message(error.message, true));
+  } else if (pointer) {
+    mapState.ticks = Math.min(mapState.ticks, 300); animateCelestial();
+  }
+});
+mapCanvas.addEventListener("pointerleave", () => {
+  if (!mapState || mapState.pointer) return;
+  mapState.hover = null; $("#map-tooltip").hidden = true; drawCelestial();
+});
+mapCanvas.addEventListener("wheel", (event) => {
+  if (!mapState) return;
+  event.preventDefault();
+  const point = celestialPoint(event), factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
+  const scale = Math.max(0.35, Math.min(4, mapState.scale * factor));
+  mapState.panX = point.sx - point.x * scale; mapState.panY = point.sy - point.y * scale;
+  mapState.scale = scale; drawCelestial();
+}, { passive: false });
 $("#correct-button").onclick = () => { $("#detail-dialog").close(); editMemory(selected); };
 $("#memory-form").onsubmit = guard(async () => {
   const form = $("#memory-form"), field = (name) => form.elements[name].value;
