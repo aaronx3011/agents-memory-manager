@@ -59,6 +59,12 @@ No memory directories or notes need to be added to those projects.
 - **Vector inspection:** a per-memory view exposes the stored dimensions and
   component signal, passage-level vectors with cosine agreement, nearest
   memories, and a PCA map of the selected record, its passages and neighbours.
+- **Celestial map:** `GET /api/map` feeds a full-screen graph of current memories
+  in scope. A vendored d3 v7.9.0 (`web/d3.min.js`, ISC licence in
+  `web/d3.LICENSE`, no CDN or build step) lays out one cluster per project and
+  handles zoom, pan and dragging. A side panel adds search, toggles to show or hide
+  projects and types, the selected memory with its relations, and a
+  keyboard-navigable memory list. Opening a memory leaves the map open underneath.
 - **Deletion:** purges canonical text, vectors, revisions, explicitly derived
   memories, and checkpoints referencing deleted IDs. Tombstones support replay
   during restore. Backups have their own retention.
@@ -201,7 +207,9 @@ clearly labeled synthetic memories in `agent-memory`. Python tests cover scope/R
 concurrency, idempotency, sources/history, semantic recall, fallback, budgets,
 checkpoints, MCP transport, extraction contracts, job failures and deletion races.
 Vector inspection is covered by HTTP scope/pending/math tests and a Chromium workflow
-that opens the dashboard view and verifies both canvases render.
+that opens the dashboard view and verifies both canvases render. The celestial map
+spec covers search, selection and relations, group toggles, keyboard list navigation,
+the detail dialog opening over the map, and the 390px mobile layout.
 
 ## Backup, restore and persistence
 

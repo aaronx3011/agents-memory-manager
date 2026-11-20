@@ -212,6 +212,11 @@ def create_app(settings=None, embedder=None):
     def ui_js():
         return FileResponse(web / "ui.js", media_type="application/javascript")
 
+    @app.get("/d3.min.js", include_in_schema=False)
+    def d3_js():
+        # Vendored d3 v7.9.0 (ISC, see web/d3.LICENSE); no CDN or build step.
+        return FileResponse(web / "d3.min.js", media_type="application/javascript")
+
     @app.get("/ui.css", include_in_schema=False)
     def ui_css():
         return FileResponse(web / "ui.css", media_type="text/css")

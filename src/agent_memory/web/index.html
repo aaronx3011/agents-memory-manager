@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Agent Memory</title><link rel="stylesheet" href="/ui.css">
-  <script src="/ui.js" defer></script>
+  <script src="/d3.min.js" defer></script><script src="/ui.js" defer></script>
 </head>
 <body>
   <header><div><span class="mark">am</span><strong>Agent Memory</strong><span class="subtitle">Persistent project knowledge</span></div><span id="health" class="badge">Connecting…</span></header>
@@ -44,12 +44,24 @@
     <section class="vector-panel"><h3>Passages</h3><p class="muted">Select a passage to inspect its own embedding.</p><div id="vector-passages"></div></section>
     <section class="vector-panel"><h3>Nearest memories</h3><p class="muted">Highest whole-record cosine similarity in this project scope.</p><div id="vector-neighbors"></div></section>
   </dialog>
-  <dialog id="map-dialog" aria-labelledby="map-heading">
-    <div class="toolbar"><div><h2 id="map-heading">Celestial memory map</h2><p id="map-summary" class="muted"></p></div><div class="actions"><button id="map-color" class="secondary">Color: project</button><button id="map-fit" class="secondary">Fit</button><button id="map-reset" class="secondary">Reset</button><button data-close class="secondary">Close</button></div></div>
-    <div class="map-shell"><canvas id="map-canvas" class="map-canvas" width="1000" height="620" aria-label="Celestial map of related memories"></canvas><div id="map-tooltip" class="map-tooltip" hidden></div></div>
-    <div id="map-legend" class="map-legend"></div>
-    <p class="muted map-hint">Drag to pan · scroll to zoom · drag a star to rearrange its constellation · select a star to open the memory.</p>
-    <details class="map-index"><summary>Memory index</summary><div id="map-index"></div></details>
+  <dialog id="map-dialog" class="map-dialog" aria-labelledby="map-heading">
+    <div class="map-head"><div><h2 id="map-heading">Celestial memory map</h2><p id="map-summary" class="muted" role="status" aria-live="polite"></p></div><div class="actions"><button id="map-color" class="secondary">Color: project</button><button id="map-threads" class="secondary" aria-pressed="true">Semantic threads</button><button data-close class="secondary">Close</button></div></div>
+    <div class="map-body">
+      <div class="map-shell">
+        <canvas id="map-canvas" class="map-canvas" role="img" aria-label="Celestial map of related memories. Use the memory list to navigate with a keyboard."></canvas>
+        <div id="map-state" class="map-state" hidden></div>
+        <div id="map-tooltip" class="map-tooltip" hidden></div>
+        <div class="map-zoom" role="group" aria-label="Map view"><button id="map-zoom-in" class="secondary" aria-label="Zoom in">+</button><button id="map-zoom-out" class="secondary" aria-label="Zoom out">−</button><button id="map-fit" class="secondary">Fit</button><button id="map-reset" class="secondary" aria-label="Recalculate layout">Reset</button></div>
+      </div>
+      <aside class="map-side" aria-label="Map details">
+        <label class="map-search-label">Find a memory<input id="map-search" type="search" placeholder="Title, project or type" autocomplete="off"></label>
+        <div id="map-legend" class="map-legend" role="group" aria-label="Show or hide groups"></div>
+        <section id="map-selection" class="map-selection" aria-live="polite"></section>
+        <h3 class="map-list-heading">Memories <span id="map-count" class="muted"></span></h3>
+        <ul id="map-index" class="map-index"></ul>
+      </aside>
+    </div>
+    <p class="muted map-hint">Drag to pan · scroll or pinch to zoom · drag a star to move it · select a star to inspect its relations.</p>
   </dialog>
   <dialog id="jobs-dialog"><div class="toolbar"><h2>Background processing</h2><button data-close class="secondary">Close</button></div><p class="muted">Memories persist immediately. Embeddings and optional extraction process asynchronously.</p><div id="jobs-list"></div></dialog>
   <dialog id="credentials-dialog"><div class="toolbar"><h2>Access keys</h2><button data-close class="secondary">Close</button></div><form id="credential-form"><label>Key name<input name="name" required></label><label>Project grants<select id="credential-projects" name="projects" multiple size="4"></select></label><label class="check"><input name="all_projects" type="checkbox"> Allow all current and future projects</label><label class="check"><input name="allow_shared" type="checkbox"> Allow owner-wide memory</label><label class="check"><input name="can_write" type="checkbox"> Allow capture, correction and checkpoints</label><button>Create scoped key</button></form><pre id="new-token" hidden></pre><div id="credentials-list"></div></dialog>
