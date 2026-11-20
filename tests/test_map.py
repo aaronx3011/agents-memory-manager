@@ -90,3 +90,12 @@ def test_map_bounds_nodes_without_embeddings_and_reports_truncation(client, proj
     assert data["edges"] == []
     memory_ids = {memory["id"] for memory in memories}
     assert all(item["id"] in memory_ids for item in data["nodes"])
+
+
+def test_dashboard_serves_vendored_d3_before_ui(client):
+    page = client.get("/").text
+    assert page.index('src="/d3.min.js"') < page.index('src="/ui.js"')
+    response = client.get("/d3.min.js")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/javascript")
+    assert response.text.startswith("// https://d3js.org v7.9.0")
